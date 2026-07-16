@@ -51,7 +51,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Arc::new(Config::from_env());
-    info!(port = config.port, "Starting Bondage Club Server (Rust)");
+    info!(
+        port = config.port,
+        backend = ?config.db_backend,
+        "Starting Bondage Club Server (Rust)"
+    );
 
     let db = Db::connect(&config).await?;
     let next_member = db.next_member_number().await?;

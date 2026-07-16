@@ -3,7 +3,7 @@ name = "bondage-club-server"
 version = "1.0.0"
 edition = "2021"
 authors = ["Bondage Club Server Rust Port"]
-description = "Rust rewrite of Bondage-Club-Server (Socket.IO + MongoDB)"
+description = "Rust rewrite of Bondage-Club-Server (Socket.IO + MongoDB/SQLite)"
 publish = false
 
 [dependencies]
@@ -14,6 +14,9 @@ socketioxide = { version = "0.16", features = ["extensions", "state"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 mongodb = "3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# Portable SQLite (no system lib required)
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 bcrypt = "0.17"
 dotenvy = "0.15"
 tracing = "0.1"
@@ -32,6 +35,8 @@ parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
-lto = true
+opt-level = 3
+lto = "fat"
 codegen-units = 1
-strip = true
+panic = "abort"
+strip = "symbols"

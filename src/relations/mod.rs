@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use socketioxide::extract::{Data, SocketRef, State};
 use tracing::error;
 
-use crate::db::json_object_to_set_doc;
+use crate::db::json_object_to_set_map;
 use crate::protocol::events;
 use crate::room::{room_message, sync_character};
 use crate::util::{common_time, LOVERSHIP_DELAY_MS, OWNERSHIP_DELAY_MS};
@@ -160,7 +160,7 @@ pub async fn handle_account_ownership(
             }
         }
         let set = json!({ "Ownership": ownership, "Owner": owner_str });
-        if let Ok(doc) = json_object_to_set_doc(&set) {
+        if let Ok(doc) = json_object_to_set_map(&set) {
             let _ = state.db.update_fields(&target.account_name, doc).await;
         }
         if let Some(io) = state.io.get() {
@@ -371,7 +371,7 @@ pub async fn handle_account_ownership(
                         }
                     }
                     let set = json!({ "Ownership": ownership, "Owner": "" });
-                    if let Ok(doc) = json_object_to_set_doc(&set) {
+                    if let Ok(doc) = json_object_to_set_map(&set) {
                         let _ = state.db.update_fields(&src_account, doc).await;
                     }
                     let _ = socket.emit(events::ACCOUNT_OWNERSHIP, &set);
@@ -416,7 +416,7 @@ pub async fn handle_account_ownership(
                         }
                     }
                     let set = json!({ "Ownership": ownership, "Owner": target.name });
-                    if let Ok(doc) = json_object_to_set_doc(&set) {
+                    if let Ok(doc) = json_object_to_set_map(&set) {
                         let _ = state.db.update_fields(&src_account, doc).await;
                     }
                     let _ = socket.emit(events::ACCOUNT_OWNERSHIP, &set);
@@ -455,12 +455,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     };
 
     // Load target from DB
-    let doc = match state
-        .db
-        .accounts
-        .find_one(mongodb::bson::doc! { "MemberNumber": target_mn })
-        .await
-    {
+    let doc = match state.db.find_by_member_number(target_mn).await {
         Ok(Some(d)) => d,
         _ => {
             // fail message needs room — skip if no room
@@ -469,9 +464,9 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     };
 
     let owner_mn = doc
-        .get_document("Ownership")
-        .ok()
-        .and_then(|o| o.get_i64("MemberNumber").ok());
+        .get("Ownership")
+        .and_then(|o| o.get("MemberNumber"))
+        .and_then(|v| v.as_i64());
     if owner_mn != Some(src_member) {
         // ReleaseFail
         if let Some(room_name) = {
@@ -494,15 +489,12 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
         return;
     }
 
-    let account_name = doc.get_str("AccountName").unwrap_or("").to_string();
-    let _ = state
-        .db
-        .accounts
-        .update_one(
-            mongodb::bson::doc! { "AccountName": &account_name },
-            mongodb::bson::doc! { "$set": { "Owner": "", "Ownership": mongodb::bson::Bson::Null } },
-        )
-        .await;
+    let account_name = doc
+        .get("AccountName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let _ = state.db.clear_ownership(&account_name).await;
 
     // Online target?
     {
@@ -543,15 +535,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
 }
 
 async fn clear_ownership_db(state: &AppState, account_name: &str) {
-    if let Err(e) = state
-        .db
-        .accounts
-        .update_one(
-            mongodb::bson::doc! { "AccountName": account_name },
-            mongodb::bson::doc! { "$set": { "Owner": "", "Ownership": mongodb::bson::Bson::Null } },
-        )
-        .await
-    {
+    if let Err(e) = state.db.clear_ownership(account_name).await {
         error!(error = %e, "clear ownership failed");
     }
 }
@@ -990,16 +974,10 @@ async fn handle_lover_break(
     if target_sid.is_some() {
         persist_lovership_clean(state, target_mn, &tgt_list).await;
     } else {
-        // Offline: $pull lover entry with our MemberNumber
+        // Offline: remove lover entry with our MemberNumber
         let _ = state
             .db
-            .accounts
-            .update_one(
-                mongodb::bson::doc! { "MemberNumber": target_mn },
-                mongodb::bson::doc! {
-                    "$pull": { "Lovership": { "MemberNumber": src_mn } }
-                },
-            )
+            .pull_lovership_member(target_mn, src_mn)
             .await;
     }
 
@@ -1133,17 +1111,9 @@ fn clean_lovership(list: &[Value]) -> Vec<Value> {
 
 async fn persist_lovership_clean(state: &AppState, member: i64, list: &[Value]) {
     let clean = clean_lovership(list);
-    match json_object_to_set_doc(&json!({ "Lovership": clean })) {
+    match json_object_to_set_map(&json!({ "Lovership": clean })) {
         Ok(set) => {
-            if let Err(e) = state
-                .db
-                .accounts
-                .update_one(
-                    mongodb::bson::doc! { "MemberNumber": member },
-                    mongodb::bson::doc! { "$set": set },
-                )
-                .await
-            {
+            if let Err(e) = state.db.update_fields_by_member_number(member, set).await {
                 error!(error = %e, member, "lovership persist failed");
             }
         }

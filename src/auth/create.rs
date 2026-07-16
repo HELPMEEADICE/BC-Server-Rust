@@ -1,5 +1,4 @@
-use mongodb::bson::doc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use socketioxide::extract::{Data, SocketRef, State};
 use tracing::{error, info};
 
@@ -84,21 +83,21 @@ pub async fn handle_account_create(
     let now = common_time();
     let socket_id = socket.id.to_string();
 
-    let doc = doc! {
-        "AccountName": &account_name,
-        "Email": &req.email,
-        "Password": &hash,
+    let doc = json!({
+        "AccountName": account_name.clone(),
+        "Email": req.email,
+        "Password": hash,
         "MemberNumber": member_number,
-        "Name": &req.name,
-        "Money": 100i64,
+        "Name": req.name.clone(),
+        "Money": 100,
         "Creation": now,
         "LastLogin": now,
         "Lovership": [],
-        "ItemPermission": 2i32,
+        "ItemPermission": 2,
         "FriendList": [],
         "WhiteList": [],
         "BlackList": [],
-    };
+    });
 
     if let Err(e) = state.db.insert_account(doc).await {
         error!(error = %e, "insert account failed");

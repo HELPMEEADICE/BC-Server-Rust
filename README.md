@@ -5,19 +5,45 @@ Primary implementation of the Bondage Club multiplayer backend.
 ## Stack
 
 - **tokio** + **axum** + **socketioxide** (Socket.IO 4)
-- **mongodb** (async driver)
+- **MongoDB** (default) or **SQLite** (optional via `.env`)
 - **bcrypt** (passwords uppercased before hash/verify — DB compatible)
 
 ## Run
 
 ```bash
-# Requires MongoDB
+# Default: MongoDB
 export DATABASE_URL=mongodb://localhost:27017/BondageClubDatabase
 cargo run --release
 # listens on :4288
 ```
 
+### SQLite (no MongoDB)
+
+```bash
+# Option A: scheme in DATABASE_URL
+export DATABASE_URL=sqlite:./data/bondage.db
+
+# Option B: explicit backend
+export DB_BACKEND=sqlite
+export DATABASE_URL=./data/bondage.db
+
+cargo run --release
+```
+
+Copy `.env.example` to `.env` and edit as needed.
+
 Health check: `GET /healthz`
+
+## Database config
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `DB_BACKEND` | (auto) | `mongodb` or `sqlite`; if unset, inferred from `DATABASE_URL` |
+| `DATABASE_URL` | `mongodb://localhost:27017/BondageClubDatabase` | Mongo URI, or `sqlite:./path.db` / bare `.db` path |
+| `DATABASE_NAME` | `BondageClubDatabase` | Mongo only |
+| `ACCOUNT_COLLECTION` | `Accounts` | Mongo only |
+
+SQLite stores accounts as key columns + a full JSON document blob for client-compatible flexible fields.
 
 ## Docker
 
@@ -27,11 +53,7 @@ From repo root:
 docker compose up -d --build
 ```
 
-Or build the crate image directly:
-
-```bash
-cd rust && docker build -t bc-server-rs .
-```
+Docker Compose still starts MongoDB by default. For SQLite-only, set `DB_BACKEND=sqlite` and `DATABASE_URL` in `.env` and you can skip the `db` service.
 
 ## Feature status
 
@@ -58,5 +80,6 @@ cd rust && docker build -t bc-server-rs .
 | Kick/Ban ServerKick/ServerBan order | Done |
 | AllowItem Dom+25 vs target | Done |
 | BlackList room-filtered + ItemPerm 1/2 | Done |
+| Optional SQLite backend | Done |
 
-Account documents stay flexible BSON/JSON for Mongo compatibility with existing client DBs.
+Account documents stay flexible JSON for compatibility with existing client DBs.

@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use socketioxide::extract::{Data, SocketRef, State};
 use tracing::{error, info};
 
-use crate::db::json_object_to_set_doc;
+use crate::db::json_object_to_set_map;
 use crate::protocol::events;
 use crate::protocol::{AccountBeepRequest, AccountQueryRequest, AccountUpdateEmailRequest};
 use crate::room::role_list_is_restrictive;
@@ -234,7 +234,7 @@ pub async fn handle_account_update(
         return;
     }
 
-    match json_object_to_set_doc(&data) {
+    match json_object_to_set_map(&data) {
         Ok(set) if !set.is_empty() => {
             if let Err(e) = state.db.update_fields(&account_name, set).await {
                 error!(error = %e, account = %account_name, "AccountUpdate DB error");
@@ -571,7 +571,7 @@ pub async fn handle_account_difficulty(
         }
     }
 
-    if let Ok(set) = json_object_to_set_doc(&json!({ "Difficulty": difficulty })) {
+    if let Ok(set) = json_object_to_set_map(&json!({ "Difficulty": difficulty })) {
         if let Err(e) = state.db.update_fields(&account_name, set).await {
             error!(error = %e, "difficulty update failed");
         }
@@ -612,7 +612,7 @@ pub async fn flush_delayed_updates(state: &AppState) {
         if set_json.is_empty() {
             continue;
         }
-        match json_object_to_set_doc(&Value::Object(set_json)) {
+        match json_object_to_set_map(&Value::Object(set_json)) {
             Ok(doc) => {
                 if let Err(e) = state.db.update_fields(&name, doc).await {
                     error!(error = %e, account = %name, "delayed update failed");

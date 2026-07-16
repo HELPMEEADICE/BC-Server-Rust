@@ -221,7 +221,7 @@ async fn on_disconnect_cleanup(state: &AppState, socket_id: &str, ip: &str) {
             map.insert("Game".into(), g);
         }
         if !map.is_empty() {
-            if let Ok(doc) = crate::db::json_object_to_set_doc(&serde_json::Value::Object(map)) {
+            if let Ok(doc) = crate::db::json_object_to_set_map(&serde_json::Value::Object(map)) {
                 let _ = state.db.update_fields(&name, doc).await;
             }
         }

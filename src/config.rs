@@ -1,7 +1,14 @@
 use std::env;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbBackend {
+    Mongo,
+    Sqlite,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub db_backend: DbBackend,
     pub database_url: String,
     pub database_name: String,
     pub account_collection: String,
@@ -44,9 +51,13 @@ impl Config {
             }
         }
 
+        let database_url = env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "mongodb://localhost:27017/BondageClubDatabase".into());
+        let db_backend = resolve_db_backend(&database_url);
+
         Self {
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "mongodb://localhost:27017/BondageClubDatabase".into()),
+            db_backend,
+            database_url,
             database_name: env::var("DATABASE_NAME")
                 .unwrap_or_else(|_| "BondageClubDatabase".into()),
             account_collection: env::var("ACCOUNT_COLLECTION").unwrap_or_else(|_| "Accounts".into()),
@@ -78,6 +89,39 @@ impl Config {
             email_from: env::var("EMAIL_FROM")
                 .unwrap_or_else(|_| "donotreply@bondageprojects.com".into()),
         }
+    }
+}
+
+/// Resolve backend from `DB_BACKEND` or `DATABASE_URL` scheme. Default: MongoDB.
+fn resolve_db_backend(database_url: &str) -> DbBackend {
+    if let Ok(raw) = env::var("DB_BACKEND") {
+        let v = raw.trim().to_ascii_lowercase();
+        if !v.is_empty() {
+            return match v.as_str() {
+                "sqlite" | "sql" => DbBackend::Sqlite,
+                "mongo" | "mongodb" => DbBackend::Mongo,
+                _ => {
+                    // fall through to URL scheme
+                    detect_backend_from_url(database_url)
+                }
+            };
+        }
+    }
+    detect_backend_from_url(database_url)
+}
+
+fn detect_backend_from_url(database_url: &str) -> DbBackend {
+    let lower = database_url.trim().to_ascii_lowercase();
+    if lower.starts_with("sqlite:")
+        || lower.starts_with("sqlite://")
+        || lower == ":memory:"
+        || lower.ends_with(".db")
+        || lower.ends_with(".sqlite")
+        || lower.ends_with(".sqlite3")
+    {
+        DbBackend::Sqlite
+    } else {
+        DbBackend::Mongo
     }
 }
 
