@@ -138,17 +138,19 @@ pub async fn handle_account_login(
     }
 
     let member = account.member_number;
+    // Build LoginResponse before AccountPurgeInfo-equivalent purge (Node order).
+    let response = account.to_login_response();
+    account.purge_after_login();
     {
         let mut world = state.world.write();
         world.remove_member_from_all_rooms(member);
         world.login_pending.remove(&socket_id);
         world.login_queue_len = world.login_queue_len.saturating_sub(1);
-        world.insert_account(account.clone());
+        world.insert_account(account);
     }
 
     crate::handlers::on_login(&socket, &state);
 
-    let response = account.to_login_response();
     let _ = socket.emit(events::LOGIN_RESPONSE, &response);
     crate::handlers::send_server_info_to(&socket, &state);
 }

@@ -88,23 +88,11 @@ impl OnlineAccount {
         let pose = obj.remove("Pose");
         let active_pose = obj.remove("ActivePose");
 
-        // Purge sensitive / bulky fields from remaining extra
-        for key in [
-            "Password",
-            "Email",
-            "LastLogin",
-            "Log",
-            "Skill",
-            "Wardrobe",
-            "WardrobeCharacterNames",
-            "ChatSettings",
-            "VisualSettings",
-            "AudioSettings",
-            "GameplaySettings",
-            "GhostList",
-            "HiddenItems",
-            "_id",
-        ] {
+        // Never keep secrets / mongo id in the online session blob.
+        // Node deletes Password/Email before LoginResponse; bulky fields are only
+        // purged from memory AFTER LoginResponse (AccountPurgeInfo) so clients still
+        // receive Log (ToS), Skill, Wardrobe, ChatSettings, etc.
+        for key in ["Password", "Email", "_id"] {
             obj.remove(key);
         }
 
@@ -236,6 +224,28 @@ impl OnlineAccount {
         Value::Object(map)
     }
 
+    /// Match Node `AccountPurgeInfo`: drop bulky/sensitive fields from RAM after login.
+    /// LoginResponse must be built first so Log/Skill/settings still reach the client.
+    pub fn purge_after_login(&mut self) {
+        for key in [
+            "Log",
+            "Skill",
+            "Wardrobe",
+            "WardrobeCharacterNames",
+            "ChatSettings",
+            "VisualSettings",
+            "AudioSettings",
+            "GameplaySettings",
+            "GhostList",
+            "HiddenItems",
+            "LastLogin",
+            "Password",
+            "Email",
+        ] {
+            self.extra.remove(key);
+        }
+    }
+
     /// Character data shared with room peers (omit money / friend list / account name).
     pub fn to_synced_character(&self) -> Value {
         self.to_synced_character_for_room(&[])
@@ -251,6 +261,32 @@ impl OnlineAccount {
             obj.remove("AccountName");
             obj.remove("Password");
             obj.remove("Email");
+            // Never broadcast private client-only blobs to room peers.
+            for key in [
+                "Log",
+                "Skill",
+                "Wardrobe",
+                "WardrobeCharacterNames",
+                "ChatSettings",
+                "VisualSettings",
+                "AudioSettings",
+                "GameplaySettings",
+                "GhostList",
+                "HiddenItems",
+                "LastLogin",
+                "OnlineSettings",
+                "GraphicsSettings",
+                "NotificationSettings",
+                "ControllerSettings",
+                "ImmersionSettings",
+                "RestrictionSettings",
+                "GenderSettings",
+                "ExtensionSettings",
+                "FriendNames",
+                "SubmissivesList",
+            ] {
+                obj.remove(key);
+            }
 
             if room_members.is_empty() {
                 // Full lists only when no room context

@@ -1,10 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
+use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::config::Config;
@@ -13,6 +15,9 @@ use crate::protocol::MemberNumber;
 #[derive(Clone)]
 pub struct SqliteDb {
     pool: Arc<SqlitePool>,
+    /// Serialize read-modify-write account updates (WAL still errors with BUSY_SNAPSHOT
+    /// when concurrent transactions write the same row).
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl SqliteDb {
@@ -29,13 +34,15 @@ impl SqliteDb {
             .busy_timeout(std::time::Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
+            // Keep concurrency low: account updates are RMW transactions.
+            .max_connections(4)
             .connect_with(options)
             .await
             .context("connect SQLite")?;
 
         let db = Self {
             pool: Arc::new(pool),
+            write_lock: Arc::new(Mutex::new(())),
         };
         db.migrate().await?;
         info!(url = %config.database_url, "SQLite connected");
@@ -155,15 +162,16 @@ impl SqliteDb {
             .and_then(|v| v.as_str())
             .context("Password required")?
             .to_string();
-        let member_number = obj.get("MemberNumber").and_then(|v| v.as_i64());
+        let member_number = obj.get("MemberNumber").and_then(json_to_i64);
         let name = obj
             .get("Name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let last_login = obj.get("LastLogin").and_then(|v| v.as_i64());
-        let creation = obj.get("Creation").and_then(|v| v.as_i64());
+        let last_login = obj.get("LastLogin").and_then(json_to_i64);
+        let creation = obj.get("Creation").and_then(json_to_i64);
         let data_json = serde_json::to_string(&account).context("serialize account json")?;
 
+        let _guard = self.write_lock.lock().await;
         sqlx::query(
             r#"
             INSERT INTO accounts
@@ -186,6 +194,26 @@ impl SqliteDb {
     }
 
     pub async fn update_fields(&self, account_name: &str, set: Map<String, Value>) -> Result<()> {
+        if set.is_empty() {
+            return Ok(());
+        }
+        // Retry transient SQLite locks (defensive even with write_lock).
+        let mut last_err = None;
+        for attempt in 0..8 {
+            match self.update_fields_once(account_name, &set).await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_sqlite_busy(&e) => {
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(15 * (attempt + 1) as u64)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("sqlite update_fields busy")))
+    }
+
+    async fn update_fields_once(&self, account_name: &str, set: &Map<String, Value>) -> Result<()> {
+        let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await.context("sqlite begin")?;
         let row = sqlx::query(
             r#"
@@ -201,7 +229,7 @@ impl SqliteDb {
             return Ok(());
         };
 
-        let (merged, cols) = merge_row_with_set(&row, &set)?;
+        let (merged, cols) = merge_row_with_set(&row, set)?;
         sqlx::query(
             r#"
             UPDATE accounts SET
@@ -253,6 +281,7 @@ impl SqliteDb {
         target_member: MemberNumber,
         source_member: MemberNumber,
     ) -> Result<()> {
+        let _guard = self.write_lock.lock().await;
         let mut tx = self.pool.begin().await.context("sqlite begin")?;
         let row = sqlx::query(
             r#"
@@ -274,10 +303,7 @@ impl SqliteDb {
             .context("account json must be object")?;
         if let Some(Value::Array(list)) = obj.get_mut("Lovership") {
             list.retain(|entry| {
-                entry
-                    .get("MemberNumber")
-                    .and_then(|v| v.as_i64())
-                    != Some(source_member)
+                entry.get("MemberNumber").and_then(json_to_i64) != Some(source_member)
             });
         }
 
@@ -290,18 +316,14 @@ impl SqliteDb {
             .get("Email")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let password = obj
-            .get("Password")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let member_number = obj.get("MemberNumber").and_then(|v| v.as_i64());
+        let password = password_from_json(obj);
+        let member_number = obj.get("MemberNumber").and_then(json_to_i64);
         let name = obj
             .get("Name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let last_login = obj.get("LastLogin").and_then(|v| v.as_i64());
-        let creation = obj.get("Creation").and_then(|v| v.as_i64());
+        let last_login = obj.get("LastLogin").and_then(json_to_i64);
+        let creation = obj.get("Creation").and_then(json_to_i64);
         let data_json = serde_json::to_string(&data)?;
 
         sqlx::query(
@@ -342,17 +364,77 @@ struct KeyColumns {
     creation: Option<i64>,
 }
 
-fn merge_row_with_set(row: &sqlx::sqlite::SqliteRow, set: &Map<String, Value>) -> Result<(String, KeyColumns)> {
+fn merge_row_with_set(
+    row: &sqlx::sqlite::SqliteRow,
+    set: &Map<String, Value>,
+) -> Result<(String, KeyColumns)> {
     let mut data = row_to_json(row)?;
     let obj = data
         .as_object_mut()
         .context("account json must be object")?;
 
+    // Column values are authoritative; keep them so partial updates cannot
+    // clobber Password / MemberNumber / timestamps with null/wrong types.
+    let account_name_col = obj
+        .get("AccountName")
+        .and_then(|v| v.as_str())
+        .context("AccountName missing")?
+        .to_string();
+    let password_col = password_from_json(obj);
+    let member_number_col = obj.get("MemberNumber").and_then(json_to_i64);
+    let last_login_col = obj.get("LastLogin").and_then(json_to_i64);
+    let creation_col = obj.get("Creation").and_then(json_to_i64);
+    let name_col = obj
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let email_col = obj
+        .get("Email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     for (k, v) in set {
         if k == "_id" || k == "MapData" {
             continue;
         }
+        // AccountName is identity and must not change.
+        if k == "AccountName" {
+            continue;
+        }
         obj.insert(k.clone(), v.clone());
+    }
+
+    // Re-apply protected columns if the update payload did not include them.
+    if !set.contains_key("AccountName") {
+        obj.insert("AccountName".into(), Value::String(account_name_col.clone()));
+    }
+    if !set.contains_key("Password") {
+        obj.insert("Password".into(), Value::String(password_col.clone()));
+    }
+    if !set.contains_key("MemberNumber") {
+        if let Some(n) = member_number_col {
+            obj.insert("MemberNumber".into(), Value::Number(n.into()));
+        }
+    }
+    if !set.contains_key("LastLogin") {
+        if let Some(t) = last_login_col {
+            obj.insert("LastLogin".into(), Value::Number(t.into()));
+        }
+    }
+    if !set.contains_key("Creation") {
+        if let Some(t) = creation_col {
+            obj.insert("Creation".into(), Value::Number(t.into()));
+        }
+    }
+    if !set.contains_key("Name") {
+        if let Some(n) = name_col.clone() {
+            obj.insert("Name".into(), Value::String(n));
+        }
+    }
+    if !set.contains_key("Email") {
+        if let Some(e) = email_col.clone() {
+            obj.insert("Email".into(), Value::String(e));
+        }
     }
 
     let cols = KeyColumns {
@@ -365,22 +447,52 @@ fn merge_row_with_set(row: &sqlx::sqlite::SqliteRow, set: &Map<String, Value>) -
             .get("Email")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        password: obj
-            .get("Password")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        member_number: obj.get("MemberNumber").and_then(|v| v.as_i64()),
+        password: password_from_json(obj),
+        member_number: obj.get("MemberNumber").and_then(json_to_i64),
         name: obj
             .get("Name")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        last_login: obj.get("LastLogin").and_then(|v| v.as_i64()),
-        creation: obj.get("Creation").and_then(|v| v.as_i64()),
+        last_login: obj.get("LastLogin").and_then(json_to_i64),
+        creation: obj.get("Creation").and_then(json_to_i64),
     };
+
+    // Fail closed: never write an empty password over a real hash.
+    if cols.password.is_empty() && !password_col.is_empty() {
+        bail!("sqlite update_fields refused empty password overwrite");
+    }
 
     let data_json = serde_json::to_string(&data)?;
     Ok((data_json, cols))
+}
+
+fn password_from_json(obj: &Map<String, Value>) -> String {
+    match obj.get("Password") {
+        Some(Value::String(s)) => s.clone(),
+        Some(v) if !v.is_null() => v.as_str().unwrap_or("").to_string(),
+        _ => String::new(),
+    }
+}
+
+fn json_to_i64(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().map(|u| u as i64))
+            .or_else(|| n.as_f64().map(|f| f as i64)),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn is_sqlite_busy(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_lowercase();
+    msg.contains("database is locked")
+        || msg.contains("database is busy")
+        || msg.contains("busy_snapshot")
+        || msg.contains("(code: 5)")
+        || msg.contains("(code: 6)")
+        || msg.contains("(code: 517)")
 }
 
 fn row_to_json(row: &sqlx::sqlite::SqliteRow) -> Result<Value> {

@@ -6,6 +6,8 @@ target/
 .env
 *.log
 log.txt
+*.exe
+*.db*
 
 # IDE
 .idea
@@ -13,3 +15,4 @@ log.txt
 
 # Legacy Node leftovers (if any)
 node_modules
+Bondage-Club-Server/
