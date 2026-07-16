@@ -1,4 +1,7 @@
-node_modules
+.git
+rust/target
+.env
+*.log
 log.txt
-start.bat
-web.config
+README.md
+.editorconfig

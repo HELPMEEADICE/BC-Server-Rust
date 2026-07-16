@@ -1,0 +1,37 @@
+[package]
+name = "bondage-club-server"
+version = "1.0.0"
+edition = "2021"
+authors = ["Bondage Club Server Rust Port"]
+description = "Rust rewrite of Bondage-Club-Server (Socket.IO + MongoDB)"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+socketioxide = { version = "0.16", features = ["extensions", "state"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+mongodb = "3"
+bcrypt = "0.17"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+once_cell = "1"
+rand = { version = "0.8", features = ["std"] }
+base64 = "0.22"
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
+futures-util = "0.3"
+dashmap = "6"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

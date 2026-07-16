@@ -1,26 +1,62 @@
-## Using Docker with bondage club for development
- 1. Install [Docker](https://docs.docker.com/get-docker/)
- 2. Make sure you also install `docker-compose`, Docker Desktop comes with this tool, but Linux does not. If you already have Docker installed, make sure it's at least of version `18.06.0` or higher.
- 3. Clone this repo and `Bondage-College` into the same folder so you have the following structure:
+# Bondage Club Server (Rust)
+
+Primary implementation of the Bondage Club multiplayer backend.
+
+## Stack
+
+- **tokio** + **axum** + **socketioxide** (Socket.IO 4)
+- **mongodb** (async driver)
+- **bcrypt** (passwords uppercased before hash/verify — DB compatible)
+
+## Run
+
+```bash
+# Requires MongoDB
+export DATABASE_URL=mongodb://localhost:27017/BondageClubDatabase
+cargo run --release
+# listens on :4288
 ```
-$ ls -l
-total 8
-drwxr-xr-x  18 user  staff   576 Jun 25 07:28 Bondage-Club-Server
-drwxr-xr-x  42 user  staff  1344 Jun 23 22:14 Bondage-College
+
+Health check: `GET /healthz`
+
+## Docker
+
+From repo root:
+
+```bash
+docker compose up -d --build
 ```
- 4. `cd Bondage-Club-Server`
- 5. `cp .env.example .env`
- 6. run `docker-compose up -d --build`, this will build and start up the required containers, the latter command can be repeated to update the Bondage-Club-Server if you've made server changes.
 
-Make the required changes to index.html in your Bondage-Club repository, and it will now be available at http://localhost/BondageClub/
+Or build the crate image directly:
 
- * Mongo runs at localhost:27017, by default with the username and password `admin` and `password`, this can be changed in the .env file `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD`
- * Mongo-Express runs in a separate container at http://localhost:8081 and lets you access the database
+```bash
+cd rust && docker build -t bc-server-rs .
+```
 
-### Convenience commands
- * `docker-compose down` Tear down and remove all containers but not the mongo database
- * `docker-compose down --volumes` Remove all the containers and the mongo database
- * `docker-compose up -d --build` build the server with any changes and start it up
- * `docker-compose up -d --build --no-cache` rebuild the server and start it up
- * `docker-compose logs app` View the logs from the bondage club server
- * `docker-compose logs db` View the logs of Mongo
+## Feature status
+
+| Area | Status |
+|------|--------|
+| Account create / login / LoginQueue | Done |
+| Password reset + email | Done |
+| Account update / query / beep / difficulty | Done |
+| Chat rooms search/create/join/leave | Done |
+| Chat + game relay | Done |
+| Character sync (appearance/pose/…) | Done |
+| Room admin (all actions) | Done |
+| Ownership (4-step trial→collar) | Done |
+| Lovership (6-step dating→wedding) | Done |
+| Offline release / NPC break | Done |
+| CharacterUpdate (others + AllowItem) | Done |
+| ItemUpdate (AllowItem + exclude source) | Done |
+| Message rate limit (20/s) | Done |
+| OnlineFriends (Sub/Lover/Friend + private) | Done |
+| AccountUpdate NPC Lover + room sync | Done |
+| AccountBeep (owner/leash/env/secret) | Done |
+| Post-login strip pre-auth handlers | Done |
+| Room search (Ignore/ShowLocked/Friends/240) | Done |
+| Kick/Ban ServerKick/ServerBan order | Done |
+| AllowItem Dom+25 vs target | Done |
+| BlackList room-filtered + ItemPerm 1/2 | Done |
+
+Account documents stay flexible BSON/JSON for Mongo compatibility with existing client DBs.

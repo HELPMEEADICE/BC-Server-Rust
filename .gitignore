@@ -1,7 +1,15 @@
-node_modules
-log.txt
-restart.bat
-*.bat
-.idea
+# Rust
+target/
+**/*.rs.bk
+
+# Env / secrets
 .env
 *.log
+log.txt
+
+# IDE
+.idea
+.vscode
+
+# Legacy Node leftovers (if any)
+node_modules
