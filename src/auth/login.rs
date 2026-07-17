@@ -96,7 +96,7 @@ pub async fn handle_account_login(
         return;
     }
 
-    // Kick duplicate session
+    // Kick duplicate session (Node: ForceDisconnect + AccountRemove → ChatRoomRemove ServerDisconnect)
     let dup_socket = state.world.read().find_duplicate_login(&account_name);
     if let Some(old_id) = dup_socket {
         if let Some(io) = state.io.get() {
@@ -106,11 +106,25 @@ pub async fn handle_account_login(
                 events::FORCE_DISCONNECT,
                 &codes::ERROR_DUPLICATED_LOGIN,
             );
-            crate::socket_util::disconnect_socket(io, &old_id);
         }
-        let mut world = state.world.write();
-        if let Some(old) = world.remove_account(&old_id) {
-            world.remove_member_from_all_rooms(old.member_number);
+        {
+            let mut world = state.world.write();
+            if let Some(old) = world.get_by_socket(&old_id) {
+                if let Some(ref rid) = old.chat_room_id.clone() {
+                    let member = old.member_number;
+                    crate::room::leave_room_on_disconnect(
+                        &mut world,
+                        state.io.get(),
+                        rid,
+                        member,
+                        "ServerDisconnect",
+                    );
+                }
+            }
+            let _ = world.remove_account(&old_id);
+        }
+        if let Some(io) = state.io.get() {
+            crate::socket_util::disconnect_socket(io, &old_id);
         }
     }
 

@@ -215,6 +215,7 @@ pub async fn handle_account_ownership(
         };
         room_message(
             &socket,
+            &state,
             &room_socket_name,
             src_member,
             content,
@@ -266,6 +267,7 @@ pub async fn handle_account_ownership(
                     }
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src_member,
                         "OfferStartTrial",
@@ -314,6 +316,7 @@ pub async fn handle_account_ownership(
                     }
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src_member,
                         "OfferEndTrial",
@@ -377,6 +380,7 @@ pub async fn handle_account_ownership(
                     let _ = socket.emit(events::ACCOUNT_OWNERSHIP, &set);
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src_member,
                         "StartTrial",
@@ -422,6 +426,7 @@ pub async fn handle_account_ownership(
                     let _ = socket.emit(events::ACCOUNT_OWNERSHIP, &set);
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src_member,
                         "EndTrial",
@@ -478,6 +483,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
         } {
             room_message(
                 socket,
+                &state,
                 &room_name,
                 src_member,
                 "ReleaseFail",
@@ -524,6 +530,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     } {
         room_message(
             socket,
+            &state,
             &room_name,
             src_member,
             "ReleaseSuccess",
@@ -622,6 +629,7 @@ pub async fn handle_account_lovership(
                 }
                 room_message(
                     &socket,
+                    &state,
                     &room_socket_name,
                     src.member_number,
                     "OfferBeginDating",
@@ -665,6 +673,7 @@ pub async fn handle_account_lovership(
                     }
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src.member_number,
                         "OfferBeginEngagement",
@@ -706,6 +715,7 @@ pub async fn handle_account_lovership(
                     }
                     room_message(
                         &socket,
+                        &state,
                         &room_socket_name,
                         src.member_number,
                         "OfferBeginWedding",
@@ -1066,6 +1076,7 @@ async fn apply_mutual_lover(
 
     room_message(
         socket,
+        &state,
         room_socket_name,
         src.member_number,
         content,

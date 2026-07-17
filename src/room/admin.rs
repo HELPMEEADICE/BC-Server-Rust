@@ -108,6 +108,7 @@ fn emit_effects(socket: &SocketRef, state: &AppState, e: AdminEffects) {
     if let Some((room_name, sender, content, dict)) = e.action {
         room_message(
             socket,
+            state,
             &room_name,
             sender,
             &content,
@@ -416,7 +417,8 @@ fn apply_member_or_offline(
                 let dict = source_target_dict(acc, target_mn, &target_name);
                 leave_room_inner_reason(
                     world,
-                    socket,
+                    Some(socket),
+                    None,
                     room_id,
                     target_mn,
                     Some("ServerBan"),
@@ -431,7 +433,8 @@ fn apply_member_or_offline(
                 let dict = source_target_dict(acc, target_mn, &target_name);
                 leave_room_inner_reason(
                     world,
-                    socket,
+                    Some(socket),
+                    None,
                     room_id,
                     target_mn,
                     Some("ServerKick"),

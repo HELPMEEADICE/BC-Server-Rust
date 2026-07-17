@@ -24,7 +24,8 @@ pub async fn handle_chat_room_chat(
         return;
     }
 
-    let content = msg.content.as_deref().unwrap_or("");
+    // Node: data.Content.trim() before length check
+    let content = msg.content.as_deref().unwrap_or("").trim().to_string();
     if content.len() > CHAT_MESSAGE_MAX_LENGTH {
         return;
     }
@@ -50,16 +51,16 @@ pub async fn handle_chat_room_chat(
 
     let room_name = room.socket_room_name();
 
-    if msg_type == "Whisper" {
-        if let Some(target_mn) = msg.target {
-            if let Some(target) = world.get_by_member(target_mn) {
+    // Node ChatRoomMessage: any Target → only that member (no room broadcast, no sender echo)
+    if let Some(target_mn) = msg.target {
+        if let Some(target) = world.get_by_member(target_mn) {
+            // Target should be in same room (Node iterates room accounts)
+            if room.members.contains(&target_mn) {
                 let tid = target.socket_id.clone();
                 drop(world);
-                let _ = socket.emit(events::CHAT_ROOM_MESSAGE, &payload);
                 if let Some(io) = state.io.get() {
                     crate::socket_util::emit_to(io, &tid, events::CHAT_ROOM_MESSAGE, &payload);
                 }
-                return;
             }
         }
         return;
@@ -181,19 +182,43 @@ pub async fn handle_expression_update(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    // Node may also update Appearance array on expression
-    if let Some(app) = data.get("Appearance").cloned() {
-        if app.is_array() {
-            let socket_id = socket.id.to_string();
-            let mut world = state.world.write();
-            if let Some(acc) = world.get_by_socket_mut(&socket_id) {
-                if app.as_array().is_some_and(|a| a.len() >= 5) {
-                    acc.appearance = Some(app);
-                }
+    let group = match data.get("Group").and_then(|v| v.as_str()) {
+        Some(g) if !g.is_empty() => g.to_string(),
+        _ => return,
+    };
+    let name_expr = data.get("Name").cloned().unwrap_or(Value::Null);
+    let socket_id = socket.id.to_string();
+    let (member, room_name) = {
+        let mut world = state.world.write();
+        let Some(acc) = world.get_by_socket_mut(&socket_id) else {
+            return;
+        };
+        // Node may also update Appearance array on expression (local only)
+        if let Some(app) = data.get("Appearance") {
+            if app.as_array().is_some_and(|a| a.len() >= 5) {
+                acc.appearance = Some(app.clone());
             }
         }
+        let member = acc.member_number;
+        let room_id = acc.chat_room_id.clone();
+        let room_name =
+            room_id.and_then(|id| world.chat_rooms.get(&id).map(|r| r.socket_room_name()));
+        (member, room_name)
+    };
+    if let Some(room_name) = room_name {
+        // Node: socket.to → exclude source; only { MemberNumber, Name, Group }
+        let payload = json!({
+            "MemberNumber": member,
+            "Name": name_expr,
+            "Group": group,
+        });
+        crate::socket_util::emit_to_room(
+            &socket,
+            room_name,
+            events::CHAT_ROOM_SYNC_EXPRESSION,
+            &payload,
+        );
     }
-    relay_character_field(&socket, &state, events::CHAT_ROOM_SYNC_EXPRESSION, data).await;
 }
 
 pub async fn handle_pose_update(
@@ -204,31 +229,40 @@ pub async fn handle_pose_update(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    let socket_id = socket.id.to_string();
-    {
-        let mut world = state.world.write();
-        if let Some(acc) = world.get_by_socket_mut(&socket_id) {
-            // Node normalizes Pose to string array
-            let pose = match data.get("Pose") {
-                Some(Value::Array(arr)) => {
-                    let filtered: Vec<Value> = arr
-                        .iter()
-                        .filter(|p| p.is_string())
-                        .cloned()
-                        .collect();
-                    Some(Value::Array(filtered))
-                }
-                Some(Value::String(s)) => Some(json!([s])),
-                Some(_) => Some(json!([])),
-                None => None,
-            };
-            if let Some(p) = pose {
-                acc.active_pose = Some(p.clone());
-                acc.pose = Some(p);
-            }
-        }
+    // Node rejects array root payload
+    if data.is_array() {
+        return;
     }
-    relay_character_field(&socket, &state, events::CHAT_ROOM_SYNC_POSE, data).await;
+    let socket_id = socket.id.to_string();
+    let pose = match data.get("Pose") {
+        Some(Value::Array(arr)) => {
+            let filtered: Vec<Value> = arr.iter().filter(|p| p.is_string()).cloned().collect();
+            Value::Array(filtered)
+        }
+        Some(Value::String(s)) => json!([s]),
+        _ => json!([]),
+    };
+    let (member, room_name) = {
+        let mut world = state.world.write();
+        let Some(acc) = world.get_by_socket_mut(&socket_id) else {
+            return;
+        };
+        acc.active_pose = Some(pose.clone());
+        acc.pose = Some(pose.clone());
+        let member = acc.member_number;
+        let room_id = acc.chat_room_id.clone();
+        let room_name =
+            room_id.and_then(|id| world.chat_rooms.get(&id).map(|r| r.socket_room_name()));
+        (member, room_name)
+    };
+    if let Some(name) = room_name {
+        // Node: socket.to → exclude source; payload Pose is string[]
+        let payload = json!({
+            "MemberNumber": member,
+            "Pose": pose,
+        });
+        crate::socket_util::emit_to_room(&socket, name, events::CHAT_ROOM_SYNC_POSE, &payload);
+    }
 }
 
 pub async fn handle_arousal_update(
@@ -240,26 +274,50 @@ pub async fn handle_arousal_update(
         return;
     }
     let socket_id = socket.id.to_string();
-    {
+    let (member, room_name, emit) = {
         let mut world = state.world.write();
-        if let Some(acc) = world.get_by_socket_mut(&socket_id) {
-            if let Some(settings) = acc.arousal_settings.as_mut().and_then(|v| v.as_object_mut()) {
-                if let Some(v) = data.get("OrgasmTimer") {
-                    settings.insert("OrgasmTimer".into(), v.clone());
-                }
-                if let Some(v) = data.get("OrgasmCount") {
-                    settings.insert("OrgasmCount".into(), v.clone());
-                }
-                if let Some(v) = data.get("Progress") {
-                    settings.insert("Progress".into(), v.clone());
-                }
-                if let Some(v) = data.get("ProgressTimer") {
-                    settings.insert("ProgressTimer".into(), v.clone());
-                }
-            }
+        let Some(acc) = world.get_by_socket_mut(&socket_id) else {
+            return;
+        };
+        // Node: only if ArousalSettings already exists
+        let Some(settings) = acc.arousal_settings.as_mut().and_then(|v| v.as_object_mut()) else {
+            return;
+        };
+        if let Some(v) = data.get("OrgasmTimer") {
+            settings.insert("OrgasmTimer".into(), v.clone());
+        }
+        if let Some(v) = data.get("OrgasmCount") {
+            settings.insert("OrgasmCount".into(), v.clone());
+        }
+        if let Some(v) = data.get("Progress") {
+            settings.insert("Progress".into(), v.clone());
+        }
+        if let Some(v) = data.get("ProgressTimer") {
+            settings.insert("ProgressTimer".into(), v.clone());
+        }
+        let member = acc.member_number;
+        let room_id = acc.chat_room_id.clone();
+        let room_name =
+            room_id.and_then(|id| world.chat_rooms.get(&id).map(|r| r.socket_room_name()));
+        (member, room_name, true)
+    };
+    if emit {
+        if let Some(name) = room_name {
+            let payload = json!({
+                "MemberNumber": member,
+                "OrgasmTimer": data.get("OrgasmTimer"),
+                "OrgasmCount": data.get("OrgasmCount"),
+                "Progress": data.get("Progress"),
+                "ProgressTimer": data.get("ProgressTimer"),
+            });
+            crate::socket_util::emit_to_room(
+                &socket,
+                name,
+                events::CHAT_ROOM_SYNC_AROUSAL,
+                &payload,
+            );
         }
     }
-    relay_character_field(&socket, &state, events::CHAT_ROOM_SYNC_AROUSAL, data).await;
 }
 
 /// Node `ChatRoomCharacterItemUpdate`: ban + AllowItem if target in room; emit excluding source.
@@ -342,7 +400,8 @@ pub async fn handle_map_data_update(
             "MemberNumber": member,
             "MapData": data,
         });
-        crate::socket_util::emit_within(&socket, name, events::CHAT_ROOM_SYNC_MAP_DATA, &payload);
+        // Node: socket.to → exclude source
+        crate::socket_util::emit_to_room(&socket, name, events::CHAT_ROOM_SYNC_MAP_DATA, &payload);
     }
 }
 
@@ -473,34 +532,4 @@ fn dominant_value(acc: &crate::state::OnlineAccount) -> i64 {
         .unwrap_or(0)
 }
 
-async fn relay_character_field(
-    socket: &SocketRef,
-    state: &AppState,
-    event: &str,
-    mut data: Value,
-) {
-    let socket_id = socket.id.to_string();
-    let world = state.world.read();
-    let Some(acc) = world.get_by_socket(&socket_id) else {
-        return;
-    };
-    let Some(ref room_id) = acc.chat_room_id else {
-        return;
-    };
-    let Some(room) = world.chat_rooms.get(room_id) else {
-        return;
-    };
 
-    if let Some(obj) = data.as_object_mut() {
-        obj.insert("MemberNumber".into(), json!(acc.member_number));
-    } else {
-        data = json!({
-            "MemberNumber": acc.member_number,
-            "Data": data,
-        });
-    }
-
-    let room_name = room.socket_room_name();
-    drop(world);
-    crate::socket_util::emit_within(&socket, room_name, event, &data);
-}

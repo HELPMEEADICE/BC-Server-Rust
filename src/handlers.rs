@@ -184,6 +184,7 @@ async fn handle_account_disconnect(socket: SocketRef, State(state): State<AppSta
     if !check_message_rate(&socket) {
         return;
     }
+    // Node: AccountRemove only — socket stays connected
     let sid = socket.id.to_string();
     let ip = socket
         .extensions
@@ -191,7 +192,6 @@ async fn handle_account_disconnect(socket: SocketRef, State(state): State<AppSta
         .map(|c| c.0)
         .unwrap_or_else(|| "unknown".into());
     on_disconnect_cleanup(&state, &sid, &ip).await;
-    let _ = socket.clone().disconnect();
 }
 
 async fn on_disconnect_cleanup(state: &AppState, socket_id: &str, ip: &str) {
@@ -229,16 +229,22 @@ async fn on_disconnect_cleanup(state: &AppState, socket_id: &str, ip: &str) {
 
     {
         let mut world = state.world.write();
+        // Snapshot room before remove so we can notify peers (Node ChatRoomRemove ServerDisconnect)
+        let room_leave = world.get_by_socket(socket_id).and_then(|acc| {
+            acc.chat_room_id
+                .as_ref()
+                .map(|rid| (rid.clone(), acc.member_number))
+        });
+        if let Some((rid, member)) = room_leave {
+            room::leave_room_on_disconnect(
+                &mut world,
+                state.io.get(),
+                &rid,
+                member,
+                "ServerDisconnect",
+            );
+        }
         if let Some(acc) = world.remove_account(socket_id) {
-            if let Some(ref rid) = acc.chat_room_id {
-                if let Some(room) = world.chat_rooms.get_mut(rid) {
-                    room.members.retain(|&m| m != acc.member_number);
-                    let empty = room.members.is_empty();
-                    if empty {
-                        world.remove_room(rid);
-                    }
-                }
-            }
             info!(account = %acc.account_name, "Account disconnected");
         }
         on_ip_disconnect(&mut world, ip);

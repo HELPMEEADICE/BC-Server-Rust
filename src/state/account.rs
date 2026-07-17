@@ -154,6 +154,13 @@ impl OnlineAccount {
         map.insert("Name".into(), Value::String(self.name.clone()));
         map.insert("Creation".into(), json_num(self.creation));
         map.insert("ItemPermission".into(), json_num(self.item_permission as i64));
+        // Node always includes AssetFamily on shared/login character data
+        if !self.extra.contains_key("AssetFamily") {
+            map.insert(
+                "AssetFamily".into(),
+                Value::String("Female3DCG".into()),
+            );
+        }
         map.insert("WhiteList".into(), member_list_json(&self.white_list));
         map.insert("BlackList".into(), member_list_json(&self.black_list));
         map.insert("FriendList".into(), member_list_json(&self.friend_list));
@@ -256,6 +263,8 @@ impl OnlineAccount {
     pub fn to_synced_character_for_room(&self, room_members: &[MemberNumber]) -> Value {
         let mut v = self.to_login_response();
         if let Some(obj) = v.as_object_mut() {
+            obj.entry("AssetFamily".to_string())
+                .or_insert_with(|| Value::String("Female3DCG".into()));
             obj.remove("Money");
             obj.remove("FriendList");
             obj.remove("AccountName");

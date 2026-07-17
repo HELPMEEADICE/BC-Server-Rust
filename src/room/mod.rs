@@ -170,7 +170,8 @@ pub async fn handle_chat_room_search(
             if room.is_full() && !include_full {
                 continue;
             }
-            if !spaces.is_empty() && !spaces.iter().any(|s| s == &room.space) {
+            // Node: Spaces.includes(room.Space) — empty Spaces matches nothing
+            if !spaces.iter().any(|s| s == &room.space) {
                 continue;
             }
             if room.ban.contains(&acc.member_number) {
@@ -211,15 +212,19 @@ pub async fn handle_chat_room_search(
                 continue;
             }
 
-            let map_type = room
+            // Node filter uses room.MapData?.Type (undefined if missing) then result MapType defaults Never
+            let map_type_raw = room
                 .map_data
                 .as_ref()
                 .and_then(|m| m.get("Type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Never");
-            if !map_types.is_empty() && !map_types.iter().any(|t| t == map_type) {
-                continue;
+                .and_then(|v| v.as_str());
+            if !map_types.is_empty() {
+                match map_type_raw {
+                    Some(t) if map_types.iter().any(|x| x == t) => {}
+                    _ => continue,
+                }
             }
+            let map_type = map_type_raw.unwrap_or("Never");
 
             // Friends list: Submissive if owned, Friend if mutual
             let mut friends = Vec::new();
@@ -288,14 +293,73 @@ pub async fn handle_chat_room_create(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    let Ok(req) = serde_json::from_value::<ChatRoomCreateRequest>(data) else {
+    // Node requires Name, Description, Background as strings
+    let name_raw = data.get("Name").and_then(|v| v.as_str()).map(str::trim);
+    let description = data.get("Description").and_then(|v| v.as_str());
+    let background = data.get("Background").and_then(|v| v.as_str());
+    let (Some(name_raw), Some(description), Some(background)) =
+        (name_raw, description, background)
+    else {
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
     };
 
-    if !is_chat_room_name(&req.name) {
-        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidName");
+    // Node Private/Visibility XOR + Access/Locked compatibility
+    let has_visibility = data
+        .get("Visibility")
+        .map(|v| v.is_array())
+        .unwrap_or(false);
+    let has_private = data.get("Private").map(|v| v.is_boolean()).unwrap_or(false);
+    if has_visibility == has_private {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
+    }
+    let has_access = data.get("Access").map(|v| v.is_array()).unwrap_or(false);
+    let has_locked = data.get("Locked").map(|v| v.is_boolean()).unwrap_or(false);
+    if has_access && has_locked {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
+        return;
+    }
+
+    if !is_chat_room_name(name_raw)
+        || description.chars().count() > CHAT_ROOM_DESCRIPTION_MAX_LENGTH
+        || background.len() > 100
+    {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
+        return;
+    }
+
+    let Ok(mut req) = serde_json::from_value::<ChatRoomCreateRequest>(data.clone()) else {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
+        return;
+    };
+    req.name = name_raw.to_string();
+
+    // Fill Private from Visibility / Access from Locked (Node compat block)
+    if has_visibility {
+        if let Some(ref v) = req.visibility {
+            req.private = Some(!v.iter().any(|x| x == "All"));
+        }
+    } else if let Some(p) = req.private {
+        req.visibility = Some(if p {
+            vec!["Admin".into()]
+        } else {
+            vec!["All".into()]
+        });
+    }
+    if has_access {
+        if let Some(ref a) = req.access {
+            req.locked = Some(!a.iter().any(|x| x == "All"));
+        }
+    } else if let Some(l) = req.locked {
+        req.access = Some(if l {
+            vec!["Admin".into(), "Whitelist".into()]
+        } else {
+            vec!["All".into()]
+        });
+    } else {
+        req.locked = Some(false);
+        req.access = Some(vec!["All".into()]);
     }
 
     let socket_id = socket.id.to_string();
@@ -303,7 +367,7 @@ pub async fn handle_chat_room_create(
     let created: Result<_, &'static str> = (|| {
         let mut world = state.world.write();
         let Some(acc) = world.get_by_socket(&socket_id).cloned() else {
-            return Err("__NO_ACC__");
+            return Err("AccountError");
         };
 
         if let Some(ref rid) = acc.chat_room_id {
@@ -322,12 +386,11 @@ pub async fn handle_chat_room_create(
             acc.member_number,
         );
 
-        if let Some(d) = req.description {
-            room.description = d.chars().take(CHAT_ROOM_DESCRIPTION_MAX_LENGTH).collect();
-        }
-        if let Some(bg) = req.background {
-            room.background = bg;
-        }
+        room.description = description
+            .chars()
+            .take(CHAT_ROOM_DESCRIPTION_MAX_LENGTH)
+            .collect();
+        room.background = background.to_string();
         if let Some(p) = req.private {
             room.private = p;
         }
@@ -343,10 +406,14 @@ pub async fn handle_chat_room_create(
             room.locked = !room.access.iter().any(|x| x == "All");
         }
         if let Some(s) = req.space {
-            room.space = s;
+            if s.len() <= 100 {
+                room.space = s;
+            }
         }
         if let Some(g) = req.game {
-            room.game = g;
+            if g.len() <= 100 {
+                room.game = g;
+            }
         }
         if let Some(a) = req.admin {
             room.admin = a;
@@ -365,7 +432,11 @@ pub async fn handle_chat_room_create(
                 .as_i64()
                 .or_else(|| lim.as_str().and_then(|s| s.parse().ok()))
                 .unwrap_or(ROOM_LIMIT_DEFAULT as i64) as i32;
-            room.limit = n.clamp(ROOM_LIMIT_MINIMUM, ROOM_LIMIT_MAXIMUM);
+            room.limit = if (ROOM_LIMIT_MINIMUM..=ROOM_LIMIT_MAXIMUM).contains(&n) {
+                n
+            } else {
+                ROOM_LIMIT_DEFAULT
+            };
         }
         if let Some(bc) = req.block_category {
             room.block_category = bc;
@@ -393,7 +464,6 @@ pub async fn handle_chat_room_create(
 
     let (room_id, room_socket_name, member, account_name, room_name) = match created {
         Ok(v) => v,
-        Err("__NO_ACC__") => return,
         Err(code) => {
             let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &code);
             return;
@@ -543,6 +613,7 @@ pub async fn handle_chat_room_join(
     // Node: ChatRoomMessage ServerEnter to whole room
     room_message(
         &socket,
+        &state,
         &room_socket_name,
         member,
         "ServerEnter",
@@ -576,13 +647,23 @@ pub fn leave_room_inner(
     room_id: &str,
     member: i64,
 ) {
-    leave_room_inner_reason(world, socket, room_id, member, Some("ServerLeave"), None);
+    leave_room_inner_reason(
+        world,
+        Some(socket),
+        None,
+        room_id,
+        member,
+        Some("ServerLeave"),
+        None,
+    );
 }
 
 /// Like `leave_room_inner`, optionally emitting a room Action message before leave sync.
+/// Prefer `socket` when available; use `io` for disconnect / dup-login (Node `IO.to`).
 pub fn leave_room_inner_reason(
     world: &mut crate::state::World,
-    socket: &SocketRef,
+    socket: Option<&SocketRef>,
+    io: Option<&socketioxide::SocketIo>,
     room_id: &str,
     member: i64,
     reason: Option<&str>,
@@ -610,10 +691,16 @@ pub fn leave_room_inner_reason(
     if let Some(name) = room_socket_name {
         // Target leaves the Socket.IO room if still connected
         if let Some(ref sid) = target_sid {
-            if let Some(ts) = crate::socket_util::get_socket_from_ref(socket, sid) {
-                ts.leave(name.clone());
-            } else if socket.id.to_string() == *sid {
-                socket.leave(name.clone());
+            if let Some(s) = socket {
+                if let Some(ts) = crate::socket_util::get_socket_from_ref(s, sid) {
+                    ts.leave(name.clone());
+                } else if s.id.to_string() == *sid {
+                    s.leave(name.clone());
+                }
+            } else if let Some(io) = io {
+                if let Some(ts) = crate::socket_util::get_socket(io, sid) {
+                    ts.leave(name.clone());
+                }
             }
         }
 
@@ -625,7 +712,6 @@ pub fn leave_room_inner_reason(
         // Node: only message + leave sync when room is not empty
         if remaining > 0 {
             if let Some(content) = reason {
-                // Node fills SourceCharacter if Dictionary empty
                 let dict = dictionary.unwrap_or_else(|| {
                     json!([{
                         "Tag": "SourceCharacter",
@@ -633,15 +719,44 @@ pub fn leave_room_inner_reason(
                         "MemberNumber": member
                     }])
                 });
-                room_message(socket, &name, member, content, "Action", None, Some(dict));
+                let payload = json!({
+                    "Sender": member,
+                    "Content": content,
+                    "Type": "Action",
+                    "Dictionary": dict,
+                });
+                if let Some(s) = socket {
+                    crate::socket_util::emit_within(
+                        s,
+                        name.clone(),
+                        events::CHAT_ROOM_MESSAGE,
+                        &payload,
+                    );
+                } else if let Some(io) = io {
+                    crate::socket_util::emit_io_within(
+                        io,
+                        name.clone(),
+                        events::CHAT_ROOM_MESSAGE,
+                        &payload,
+                    );
+                }
             }
             let payload = json!({ "SourceMemberNumber": member });
-            crate::socket_util::emit_within(
-                socket,
-                name,
-                events::CHAT_ROOM_SYNC_MEMBER_LEAVE,
-                &payload,
-            );
+            if let Some(s) = socket {
+                crate::socket_util::emit_within(
+                    s,
+                    name,
+                    events::CHAT_ROOM_SYNC_MEMBER_LEAVE,
+                    &payload,
+                );
+            } else if let Some(io) = io {
+                crate::socket_util::emit_io_within(
+                    io,
+                    name,
+                    events::CHAT_ROOM_SYNC_MEMBER_LEAVE,
+                    &payload,
+                );
+            }
         }
     }
 
@@ -652,9 +767,22 @@ pub fn leave_room_inner_reason(
     }
 }
 
-/// Broadcast a ChatRoomMessage to a socket.io room (or a single target member).
+/// Notify room of disconnect/leave without a live peer socket (Node `ChatRoomRemove` via IO).
+pub fn leave_room_on_disconnect(
+    world: &mut crate::state::World,
+    io: Option<&socketioxide::SocketIo>,
+    room_id: &str,
+    member: i64,
+    reason: &str,
+) {
+    leave_room_inner_reason(world, None, io, room_id, member, Some(reason), None);
+}
+
+/// Broadcast a ChatRoomMessage to a socket.io room, or only to a target member (Node).
+/// `target` is MemberNumber; when set, message is delivered only to that socket.
 pub fn room_message(
     socket: &SocketRef,
+    state: &AppState,
     room_socket_name: &str,
     sender: i64,
     content: &str,
@@ -668,27 +796,28 @@ pub fn room_message(
         "Type": msg_type,
         "Dictionary": dictionary,
     });
-    if target.is_some() {
-        // Node emits only to the target socket; room broadcast with Target is an approximation
-        // used when caller does not resolve the target socket id.
-        let mut p = payload;
-        if let Some(obj) = p.as_object_mut() {
-            obj.insert("Target".into(), json!(target));
+    if let Some(target_mn) = target {
+        // Node: only target socket; no room broadcast, no sender echo
+        let sid = state
+            .world
+            .read()
+            .get_by_member(target_mn)
+            .map(|a| a.socket_id.clone());
+        if let Some(sid) = sid {
+            if let Some(io) = state.io.get() {
+                crate::socket_util::emit_to(io, &sid, events::CHAT_ROOM_MESSAGE, &payload);
+            } else if let Some(ts) = crate::socket_util::get_socket_from_ref(socket, &sid) {
+                let _ = ts.emit(events::CHAT_ROOM_MESSAGE, &payload);
+            }
         }
-        crate::socket_util::emit_within(
-            socket,
-            room_socket_name.to_string(),
-            events::CHAT_ROOM_MESSAGE,
-            &p,
-        );
-    } else {
-        crate::socket_util::emit_within(
-            socket,
-            room_socket_name.to_string(),
-            events::CHAT_ROOM_MESSAGE,
-            &payload,
-        );
+        return;
     }
+    crate::socket_util::emit_within(
+        socket,
+        room_socket_name.to_string(),
+        events::CHAT_ROOM_MESSAGE,
+        &payload,
+    );
 }
 
 /// Broadcast room properties to all members.

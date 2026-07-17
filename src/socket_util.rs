@@ -64,3 +64,15 @@ pub fn emit_io(io: &SocketIo, event: &str, data: &impl Serialize) {
         let _ = io.emit(event.as_str(), &data).await;
     });
 }
+
+/// Broadcast to everyone in a Socket.IO room via global `io` (Node `IO.to(room)`).
+/// Prefer this when the leaving socket may already be gone (disconnect / dup-login kick).
+pub fn emit_io_within(io: &SocketIo, room: impl Into<String>, event: &str, data: &impl Serialize) {
+    let io = io.clone();
+    let room = room.into();
+    let event = event.to_string();
+    let data = owned_payload(data);
+    tokio::spawn(async move {
+        let _ = io.within(room).emit(event.as_str(), &data).await;
+    });
+}
