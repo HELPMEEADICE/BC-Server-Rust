@@ -6,7 +6,9 @@ use crate::db::json_object_to_set_map;
 use crate::protocol::events;
 use crate::protocol::{AccountBeepRequest, AccountQueryRequest, AccountUpdateEmailRequest};
 use crate::room::role_list_is_restrictive;
-use crate::util::{common_time, is_email_valid, is_simple_object, DIFFICULTY_DELAY_MS};
+use crate::util::{
+	apply_dotted_path, common_time, is_email_valid, is_simple_object, DIFFICULTY_DELAY_MS,
+};
 use crate::AppState;
 
 const IMMUTABLE_KEYS: &[&str] = &[
@@ -172,6 +174,38 @@ pub async fn handle_account_update(
         }
         if let Some(v) = obj.get("Crafting") {
             acc.crafting = Some(v.clone());
+        }
+        // Private room NPCs are stored as account data. Keep the latest client
+        // snapshot in memory too, so subsequent session operations cannot retain
+        // the stale login-time version until the player reconnects.
+        if let Some(v) = obj.get("PrivateCharacter") {
+            acc.extra.insert("PrivateCharacter".into(), v.clone());
+        }
+
+        // Client may send Mongo-style dotted keys such as
+        // `ExtensionSettings.UndergroundPrison`. Nest them into `extra` so the
+        // online session and LoginResponse stay consistent with DB storage.
+        for (k, v) in obj.iter() {
+            if k.contains('.') {
+                // Build nested structure inside a temp map of extra keys.
+                let mut nested = serde_json::Map::new();
+                // Seed with existing top-level extra values that match the first segment.
+                if let Some(first) = k.split('.').next() {
+                    if let Some(existing) = acc.extra.get(first) {
+                        nested.insert(first.to_string(), existing.clone());
+                    }
+                }
+                apply_dotted_path(&mut nested, k, v.clone());
+                for (nk, nv) in nested {
+                    acc.extra.insert(nk, nv);
+                }
+            } else if k == "ExtensionSettings" {
+                acc.extra.insert("ExtensionSettings".into(), v.clone());
+            } else if k == "Money" {
+                acc.extra.insert("Money".into(), v.clone());
+            } else if k == "Log" {
+                acc.extra.insert("Log".into(), v.clone());
+            }
         }
 
         let should_room_sync = acc.chat_room_id.is_some()
@@ -622,4 +656,3 @@ pub async fn flush_delayed_updates(state: &AppState) {
         }
     }
 }
-

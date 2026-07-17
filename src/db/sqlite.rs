@@ -11,6 +11,7 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::protocol::MemberNumber;
+use crate::util::merge_set_into_object;
 
 #[derive(Clone)]
 pub struct SqliteDb {
@@ -393,16 +394,9 @@ fn merge_row_with_set(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    for (k, v) in set {
-        if k == "_id" || k == "MapData" {
-            continue;
-        }
-        // AccountName is identity and must not change.
-        if k == "AccountName" {
-            continue;
-        }
-        obj.insert(k.clone(), v.clone());
-    }
+    // Support Mongo-style dotted paths from the client
+    // (e.g. ExtensionSettings.UndergroundPrison) by nesting into JSON.
+    merge_set_into_object(obj, set);
 
     // Re-apply protected columns if the update payload did not include them.
     if !set.contains_key("AccountName") {
