@@ -76,7 +76,7 @@ impl ChatRoom {
     }
 
     pub fn to_properties_json(&self) -> Value {
-        serde_json::json!({
+        let mut properties = serde_json::json!({
             "Name": self.name,
             "Description": self.description,
             "Admin": self.admin,
@@ -94,6 +94,15 @@ impl ChatRoom {
             "Space": self.space,
             "MapData": self.map_data,
             "Custom": self.custom,
-        })
+        });
+        // JSON.stringify drops JavaScript undefined properties; serde would emit null.
+        let object = properties.as_object_mut().unwrap();
+        if self.map_data.is_none() {
+            object.remove("MapData");
+        }
+        if self.custom.is_none() {
+            object.remove("Custom");
+        }
+        properties
     }
 }

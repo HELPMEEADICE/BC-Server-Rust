@@ -49,6 +49,10 @@ pub async fn handle_chat_room_chat(
         "Sender": acc.member_number,
         "Dictionary": msg.dictionary,
     });
+    let mut payload = payload;
+    if msg.dictionary.is_none() {
+        payload.as_object_mut().unwrap().remove("Dictionary");
+    }
 
     let room_name = room.socket_room_name();
 
@@ -77,6 +81,10 @@ pub async fn handle_chat_room_game(
     State(state): State<AppState>,
 ) {
     if !crate::handlers::check_message_rate(&socket) {
+        return;
+    }
+    // Node accepts object values (including arrays), but rejects scalars and null.
+    if !data.is_object() && !data.is_array() {
         return;
     }
     let socket_id = socket.id.to_string();
@@ -230,8 +238,8 @@ pub async fn handle_pose_update(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    // Node rejects array root payload
-    if data.is_array() {
+    // Node requires a non-null object and rejects an array root payload.
+    if !data.is_object() {
         return;
     }
     let socket_id = socket.id.to_string();
@@ -274,6 +282,9 @@ pub async fn handle_arousal_update(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
+    if !data.is_object() && !data.is_array() {
+        return;
+    }
     let socket_id = socket.id.to_string();
     let (member, room_name, emit) = {
         let mut world = state.world.write();
@@ -284,17 +295,13 @@ pub async fn handle_arousal_update(
         let Some(settings) = acc.arousal_settings.as_mut().and_then(|v| v.as_object_mut()) else {
             return;
         };
-        if let Some(v) = data.get("OrgasmTimer") {
-            settings.insert("OrgasmTimer".into(), v.clone());
-        }
-        if let Some(v) = data.get("OrgasmCount") {
-            settings.insert("OrgasmCount".into(), v.clone());
-        }
-        if let Some(v) = data.get("Progress") {
-            settings.insert("Progress".into(), v.clone());
-        }
-        if let Some(v) = data.get("ProgressTimer") {
-            settings.insert("ProgressTimer".into(), v.clone());
+        for key in ["OrgasmTimer", "OrgasmCount", "Progress", "ProgressTimer"] {
+            if let Some(value) = data.get(key) {
+                settings.insert(key.into(), value.clone());
+            } else {
+                // Assigning undefined in Node omits the field from later JSON packets.
+                settings.remove(key);
+            }
         }
         let member = acc.member_number;
         let room_id = acc.chat_room_id.clone();
@@ -304,13 +311,13 @@ pub async fn handle_arousal_update(
     };
     if emit {
         if let Some(name) = room_name {
-            let payload = json!({
-                "MemberNumber": member,
-                "OrgasmTimer": data.get("OrgasmTimer"),
-                "OrgasmCount": data.get("OrgasmCount"),
-                "Progress": data.get("Progress"),
-                "ProgressTimer": data.get("ProgressTimer"),
-            });
+            let mut payload = json!({ "MemberNumber": member });
+            let fields = payload.as_object_mut().unwrap();
+            for key in ["OrgasmTimer", "OrgasmCount", "Progress", "ProgressTimer"] {
+                if let Some(value) = data.get(key) {
+                    fields.insert(key.into(), value.clone());
+                }
+            }
             crate::socket_util::emit_to_room(
                 &socket,
                 name,
@@ -330,7 +337,6 @@ pub async fn handle_item_update(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-
     let target_mn = match data.get("Target").and_then(|v| v.as_i64()) {
         Some(n) => n,
         None => return,
@@ -379,6 +385,9 @@ pub async fn handle_map_data_update(
     State(state): State<AppState>,
 ) {
     if !crate::handlers::check_message_rate(&socket) {
+        return;
+    }
+    if !data.is_object() && !data.is_array() {
         return;
     }
     let socket_id = socket.id.to_string();
@@ -533,5 +542,3 @@ fn dominant_value(acc: &crate::state::OnlineAccount) -> i64 {
         })
         .unwrap_or(0)
 }
-
-

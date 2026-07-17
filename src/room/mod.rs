@@ -5,7 +5,7 @@ use socketioxide::extract::{Data, SocketRef, State};
 use tracing::info;
 
 use crate::protocol::events;
-use crate::protocol::{ChatRoomCreateRequest, ChatRoomJoinRequest, ChatRoomSearchRequest};
+use crate::protocol::{ChatRoomCreateRequest, ChatRoomJoinRequest};
 use crate::state::{ChatRoom, OnlineAccount};
 use crate::util::{
     is_chat_room_name, CHAT_ROOM_DESCRIPTION_MAX_LENGTH, ROOM_LIMIT_DEFAULT, ROOM_LIMIT_MAXIMUM,
@@ -48,26 +48,13 @@ pub async fn handle_chat_room_search(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    // Query length guard (Node: Query string length > 20 → return)
-    let query_raw = data
-        .get("Query")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    // Node requires a plain object with a string Query.
+    let Some(query_raw) = data.get("Query").and_then(|v| v.as_str()) else {
+        return;
+    };
     if query_raw.len() > 20 {
         return;
     }
-
-    let req: ChatRoomSearchRequest = serde_json::from_value(data.clone()).unwrap_or(
-        ChatRoomSearchRequest {
-            query: None,
-            space: None,
-            game: None,
-            full_rooms: None,
-            language: None,
-            map: None,
-            extra: Value::Null,
-        },
-    );
 
     let socket_id = socket.id.to_string();
     let results = {
@@ -77,9 +64,9 @@ pub async fn handle_chat_room_search(
         };
 
         // Node: Query is trim only; matching uses uppercased room name includes(Query)
-        let query = req.query.as_deref().unwrap_or("").trim().to_string();
+        let query = query_raw.trim().to_string();
         let query_upper = query.to_uppercase();
-        let include_full = req.full_rooms.unwrap_or(false);
+        let include_full = data.get("FullRooms").and_then(|v| v.as_bool()).unwrap_or(false);
         let show_locked = data
             .get("ShowLocked")
             .and_then(|v| v.as_bool())
@@ -102,11 +89,7 @@ pub async fn handle_chat_room_search(
                     }
                 }
             }
-            _ => {
-                if let Some(s) = req.space.clone() {
-                    spaces.push(s);
-                }
-            }
+            _ => {}
         }
 
         // Languages: string or array
@@ -120,13 +103,7 @@ pub async fn handle_chat_room_search(
                     }
                 }
             }
-            _ => {
-                if let Some(l) = req.language.clone() {
-                    if !l.is_empty() {
-                        languages.push(l);
-                    }
-                }
-            }
+            _ => {}
         }
 
         // Ignore list (uppercased valid room names)
@@ -153,7 +130,11 @@ pub async fn handle_chat_room_search(
             }
         }
 
-        let game_filter = req.game.clone().unwrap_or_default();
+        let game_filter = data
+            .get("Game")
+            .and_then(|v| v.as_str())
+            .filter(|game| game.len() <= 100)
+            .unwrap_or("");
 
         // Newest first (Node reverses ChatRoom array)
         let mut rooms: Vec<&ChatRoom> = world.chat_rooms.values().collect();
@@ -324,7 +305,31 @@ pub async fn handle_chat_room_create(
         return;
     }
 
-    let Ok(mut req) = serde_json::from_value::<ChatRoomCreateRequest>(data.clone()) else {
+    // Node normalizes malformed optional lists instead of rejecting the entire room.
+    let mut normalized = data.clone();
+    let Some(fields) = normalized.as_object_mut() else {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
+        return;
+    };
+    for key in ["Admin", "Ban", "Whitelist"] {
+        if !fields
+            .get(key)
+            .is_some_and(|value| value.as_array().is_some_and(|items| items.iter().all(Value::is_i64)))
+        {
+            fields.insert(key.to_string(), Value::Null);
+        }
+    }
+    for key in ["Space", "Game", "Language"] {
+        if fields.get(key).is_some_and(|value| !value.is_string()) {
+            fields.insert(key.to_string(), Value::Null);
+        }
+    }
+    if fields.get("BlockCategory").is_some_and(|value| {
+        !value.as_array().is_some_and(|items| items.iter().all(Value::is_string))
+    }) {
+        fields.insert("BlockCategory".to_string(), json!([]));
+    }
+    let Ok(mut req) = serde_json::from_value::<ChatRoomCreateRequest>(normalized) else {
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
     };
@@ -365,13 +370,12 @@ pub async fn handle_chat_room_create(
             return Err("AccountError");
         };
 
-        if let Some(ref rid) = acc.chat_room_id {
-            leave_room_inner(&mut world, &socket, rid, acc.member_number);
-        }
-
         // Node: name unique globally (all environments)
         if world.room_name_exists_any(&req.name) {
             return Err("RoomAlreadyExist");
+        }
+        if let Some(ref rid) = acc.chat_room_id {
+            leave_room_inner(&mut world, &socket, rid, acc.member_number);
         }
 
         let mut room = ChatRoom::new(
@@ -486,6 +490,10 @@ pub async fn handle_chat_room_join(
         let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"InvalidRoomData");
         return;
     };
+    if req.name.is_empty() {
+        let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"InvalidRoomData");
+        return;
+    }
 
     let socket_id = socket.id.to_string();
 
@@ -786,12 +794,15 @@ pub fn room_message(
     target: Option<i64>,
     dictionary: Option<Value>,
 ) {
-    let payload = json!({
+    let mut payload = json!({
         "Sender": sender,
         "Content": content,
         "Type": msg_type,
         "Dictionary": dictionary,
     });
+    if dictionary.is_none() {
+        payload.as_object_mut().unwrap().remove("Dictionary");
+    }
     if let Some(target_mn) = target {
         // Node: only target socket; no room broadcast, no sender echo
         let sid = state
@@ -837,7 +848,7 @@ pub fn sync_room_properties(socket: &SocketRef, state: &AppState, room_id: &str,
 }
 
 /// Sync a single character to the room (ChatRoomSyncCharacter).
-/// Node: Source.Socket.to(room) — excludes source.
+/// Node sends through the source account's socket, excluding that account.
 pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source: i64) {
     let world = state.world.read();
     let Some(acc) = world.get_by_member(member) else {
@@ -855,7 +866,30 @@ pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source:
         "Character": character,
         "SourceMemberNumber": source,
     });
+    let source_socket_id = world.get_by_member(source).map(|account| account.socket_id.clone());
     drop(world);
+    if let Some(source_socket_id) = source_socket_id {
+        if let Some(io) = state.io.get() {
+            if let Some(source_socket) = crate::socket_util::get_socket(io, &source_socket_id) {
+                crate::socket_util::emit_to_room(
+                    &source_socket,
+                    name,
+                    events::CHAT_ROOM_SYNC_CHARACTER,
+                    &payload,
+                );
+                return;
+            }
+        }
+        if let Some(source_socket) = crate::socket_util::get_socket_from_ref(socket, &source_socket_id) {
+            crate::socket_util::emit_to_room(
+                &source_socket,
+                name,
+                events::CHAT_ROOM_SYNC_CHARACTER,
+                &payload,
+            );
+            return;
+        }
+    }
     crate::socket_util::emit_to_room(socket, name, events::CHAT_ROOM_SYNC_CHARACTER, &payload);
 }
 

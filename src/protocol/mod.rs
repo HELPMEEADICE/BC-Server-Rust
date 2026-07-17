@@ -68,24 +68,6 @@ pub struct AccountBeepRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ChatRoomSearchRequest {
-    #[serde(rename = "Query")]
-    pub query: Option<String>,
-    #[serde(rename = "Space")]
-    pub space: Option<String>,
-    #[serde(rename = "Game")]
-    pub game: Option<String>,
-    #[serde(rename = "FullRooms")]
-    pub full_rooms: Option<bool>,
-    #[serde(rename = "Language")]
-    pub language: Option<String>,
-    #[serde(rename = "Map")]
-    pub map: Option<String>,
-    #[serde(flatten)]
-    pub extra: Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct ChatRoomCreateRequest {
     #[serde(rename = "Name")]
     pub name: String,

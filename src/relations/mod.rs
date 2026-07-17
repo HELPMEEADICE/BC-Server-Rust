@@ -463,7 +463,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     let doc = match state.db.find_by_member_number(target_mn).await {
         Ok(Some(d)) => d,
         _ => {
-            // fail message needs room — skip if no room
+            emit_release_fail(socket, state, socket_id, src_member);
             return;
         }
     };
@@ -474,24 +474,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
         .and_then(|v| v.as_i64());
     if owner_mn != Some(src_member) {
         // ReleaseFail
-        if let Some(room_name) = {
-            let world = state.world.read();
-            world
-                .get_by_socket(socket_id)
-                .and_then(|a| a.chat_room_id.as_ref())
-                .and_then(|id| world.chat_rooms.get(id).map(|r| r.socket_room_name()))
-        } {
-            room_message(
-                socket,
-                &state,
-                &room_name,
-                src_member,
-                "ReleaseFail",
-                "ServerMessage",
-                Some(src_member),
-                None,
-            );
-        }
+        emit_release_fail(socket, state, socket_id, src_member);
         return;
     }
 
@@ -503,7 +486,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     let _ = state.db.clear_ownership(&account_name).await;
 
     // Online target?
-    {
+    let online_target = {
         let mut world = state.world.write();
         if let Some(sid) = world.socket_by_member.get(&target_mn).cloned() {
             if let Some(t) = world.get_by_socket_mut(&sid) {
@@ -518,7 +501,14 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
                     &json!({ "ClearOwnership": true }),
                 );
             }
+            true
+        } else {
+            false
         }
+    };
+    if online_target {
+        // Node uses the changed account as the sync source, excluding that account.
+        sync_character(socket, state, target_mn, target_mn);
     }
 
     if let Some(room_name) = {
@@ -538,6 +528,18 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
             Some(src_member),
             None,
         );
+    }
+}
+
+fn emit_release_fail(socket: &SocketRef, state: &AppState, socket_id: &str, src_member: i64) {
+    if let Some(room_name) = {
+        let world = state.world.read();
+        world
+            .get_by_socket(socket_id)
+            .and_then(|a| a.chat_room_id.as_ref())
+            .and_then(|id| world.chat_rooms.get(id).map(|r| r.socket_room_name()))
+    } {
+        room_message(socket, state, &room_name, src_member, "ReleaseFail", "ServerMessage", Some(src_member), None);
     }
 }
 
@@ -898,9 +900,17 @@ async fn handle_lover_break(
                 let Some(acc) = world.get_by_socket_mut(socket_id) else {
                     return;
                 };
-                acc.lovership.retain(|l| {
-                    l.get("Name").and_then(|v| v.as_str()) != Some(name.as_str())
-                });
+                // Node uses findIndex followed by splice(index, 1): it removes only the
+                // first match and, when absent, its splice(-1, 1) removes the last entry.
+                let index = acc
+                    .lovership
+                    .iter()
+                    .position(|lover| lover.get("Name").and_then(|value| value.as_str()) == Some(name.as_str()));
+                if let Some(index) = index {
+                    acc.lovership.remove(index);
+                } else {
+                    acc.lovership.pop();
+                }
                 (acc.account_name.clone(), acc.lovership.clone(), acc.member_number)
             };
             persist_lovership_clean(state, list.2, &list.1).await;

@@ -168,7 +168,12 @@ fn apply_update(
     room_id: &str,
     data: &Value,
 ) -> AdminEffects {
-    let room_data = data.get("Room").cloned().unwrap_or_else(|| data.clone());
+    let Some(room_data) = data.get("Room").filter(|room| room.is_object()).cloned() else {
+        return AdminEffects {
+            update_resp: Some("InvalidRoomData"),
+            ..AdminEffects::empty()
+        };
+    };
 
     let name = room_data
         .get("Name")
