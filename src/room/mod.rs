@@ -416,7 +416,8 @@ pub async fn handle_chat_room_join(
         return;
     }
     let Ok(req) = serde_json::from_value::<ChatRoomJoinRequest>(data) else {
-        let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"InvalidRoom");
+        // Node: InvalidRoomData
+        let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"InvalidRoomData");
         return;
     };
 
@@ -425,28 +426,39 @@ pub async fn handle_chat_room_join(
     let joined: Result<_, &'static str> = (|| {
         let mut world = state.world.write();
         let Some(acc) = world.get_by_socket(&socket_id).cloned() else {
-            return Err("__NO_ACC__");
+            return Err("AccountError");
         };
-
-        if let Some(ref rid) = acc.chat_room_id {
-            leave_room_inner(&mut world, &socket, rid, acc.member_number);
-        }
 
         let room_id = {
             let Some(room) = world.get_room_by_name(&acc.environment, &req.name) else {
-                return Err("RoomNotFound");
+                // Node: CannotFindRoom
+                return Err("CannotFindRoom");
             };
-            if room.ban.contains(&acc.member_number) {
-                return Err("RoomBanned");
-            }
             if room.is_full() {
                 return Err("RoomFull");
+            }
+            if room.ban.contains(&acc.member_number) {
+                return Err("RoomBanned");
             }
             if !has_any_role(&acc, room, &room.access) {
                 return Err("RoomLocked");
             }
+            // Node: already in this room → AlreadyInRoom (no leave/rejoin)
+            if acc.chat_room_id.as_deref() == Some(room.id.as_str()) {
+                return Err("AlreadyInRoom");
+            }
             room.id.clone()
         };
+
+        // Leave previous room if any (Node ChatRoomRemove before push)
+        if let Some(ref rid) = acc.chat_room_id {
+            leave_room_inner(&mut world, &socket, rid, acc.member_number);
+        }
+
+        // Guard: still online after leave (Node Account.find check)
+        if world.get_by_member(acc.member_number).is_none() {
+            return Err("AccountError");
+        }
 
         if let Some(room) = world.chat_rooms.get_mut(&room_id) {
             room.members.push(acc.member_number);
@@ -498,31 +510,50 @@ pub async fn handle_chat_room_join(
             "BlackListedBy": black_listed_by,
         });
 
+        let member_name = acc.name.clone();
+
         Ok((
             room_id,
             room_socket_name,
             acc.member_number,
+            member_name,
             join_payload,
         ))
     })();
 
-    let (room_id, room_socket_name, member, join_payload) = match joined {
+    let (room_id, room_socket_name, member, member_name, join_payload) = match joined {
         Ok(v) => v,
-        Err("__NO_ACC__") => return,
         Err(code) => {
             let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &code);
             return;
         }
     };
 
+    // Node order: join socket room → JoinedRoom → ChatRoomSyncMemberJoin → ChatRoomSync → ServerEnter
     socket.join(room_socket_name.clone());
-    let _ = socket
-        .within(room_socket_name)
-        .except(socket.id)
-        .emit(events::CHAT_ROOM_SYNC_MEMBER_JOIN, &join_payload);
-
     let _ = socket.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"JoinedRoom");
+    // Node: Character.Socket.to("chatroom-…") — others only
+    crate::socket_util::emit_to_room(
+        &socket,
+        room_socket_name.clone(),
+        events::CHAT_ROOM_SYNC_MEMBER_JOIN,
+        &join_payload,
+    );
     sync_room_to_member(&socket, &state, &room_id, member);
+    // Node: ChatRoomMessage ServerEnter to whole room
+    room_message(
+        &socket,
+        &room_socket_name,
+        member,
+        "ServerEnter",
+        "Action",
+        None,
+        Some(json!([{
+            "Tag": "SourceCharacter",
+            "Text": member_name,
+            "MemberNumber": member
+        }])),
+    );
 }
 
 pub async fn handle_chat_room_leave(socket: SocketRef, State(state): State<AppState>) {
@@ -605,9 +636,12 @@ pub fn leave_room_inner_reason(
                 room_message(socket, &name, member, content, "Action", None, Some(dict));
             }
             let payload = json!({ "SourceMemberNumber": member });
-            let _ = socket
-                .within(name)
-                .emit(events::CHAT_ROOM_SYNC_MEMBER_LEAVE, &payload);
+            crate::socket_util::emit_within(
+                socket,
+                name,
+                events::CHAT_ROOM_SYNC_MEMBER_LEAVE,
+                &payload,
+            );
         }
     }
 
@@ -641,13 +675,19 @@ pub fn room_message(
         if let Some(obj) = p.as_object_mut() {
             obj.insert("Target".into(), json!(target));
         }
-        let _ = socket
-            .within(room_socket_name.to_string())
-            .emit(events::CHAT_ROOM_MESSAGE, &p);
+        crate::socket_util::emit_within(
+            socket,
+            room_socket_name.to_string(),
+            events::CHAT_ROOM_MESSAGE,
+            &p,
+        );
     } else {
-        let _ = socket
-            .within(room_socket_name.to_string())
-            .emit(events::CHAT_ROOM_MESSAGE, &payload);
+        crate::socket_util::emit_within(
+            socket,
+            room_socket_name.to_string(),
+            events::CHAT_ROOM_MESSAGE,
+            &payload,
+        );
     }
 }
 
@@ -663,12 +703,16 @@ pub fn sync_room_properties(socket: &SocketRef, state: &AppState, room_id: &str,
     }
     let name = room.socket_room_name();
     drop(world);
-    let _ = socket
-        .within(name)
-        .emit(events::CHAT_ROOM_SYNC_ROOM_PROPERTIES, &props);
+    crate::socket_util::emit_within(
+        socket,
+        name,
+        events::CHAT_ROOM_SYNC_ROOM_PROPERTIES,
+        &props,
+    );
 }
 
 /// Sync a single character to the room (ChatRoomSyncCharacter).
+/// Node: Source.Socket.to(room) — excludes source.
 pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source: i64) {
     let world = state.world.read();
     let Some(acc) = world.get_by_member(member) else {
@@ -687,9 +731,7 @@ pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source:
         "SourceMemberNumber": source,
     });
     drop(world);
-    let _ = socket
-        .within(name)
-        .emit(events::CHAT_ROOM_SYNC_CHARACTER, &payload);
+    crate::socket_util::emit_to_room(socket, name, events::CHAT_ROOM_SYNC_CHARACTER, &payload);
 }
 
 pub fn sync_room_to_member(socket: &SocketRef, state: &AppState, room_id: &str, source_member: i64) {

@@ -260,14 +260,16 @@ pub fn broadcast_server_info(io: &SocketIo, state: &AppState) {
         time: common_time(),
         online_players: online,
     };
-    let _ = io.emit(events::SERVER_INFO, &info);
+    crate::socket_util::emit_io(io, events::SERVER_INFO, &info);
 }
 
 pub async fn graceful_shutdown_message(io: &SocketIo) {
-    let _ = io.emit(
-        events::SERVER_MESSAGE,
-        &"Server will reboot in 30 seconds.",
-    );
+    let _ = io
+        .emit(
+            events::SERVER_MESSAGE,
+            &"Server will reboot in 30 seconds.",
+        )
+        .await;
 }
 
 /// Per-socket client IP stored in extensions.

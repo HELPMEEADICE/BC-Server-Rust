@@ -98,9 +98,12 @@ fn emit_effects(socket: &SocketRef, state: &AppState, e: AdminEffects) {
         }
     }
     if let Some((room_name, order)) = e.reorder {
-        let _ = socket
-            .within(room_name)
-            .emit(events::CHAT_ROOM_SYNC_REORDER_PLAYERS, &order);
+        crate::socket_util::emit_within(
+            socket,
+            room_name,
+            events::CHAT_ROOM_SYNC_REORDER_PLAYERS,
+            &order,
+        );
     }
     if let Some((room_name, sender, content, dict)) = e.action {
         room_message(
@@ -114,9 +117,12 @@ fn emit_effects(socket: &SocketRef, state: &AppState, e: AdminEffects) {
         );
     }
     if let Some((room_name, payload)) = e.props {
-        let _ = socket
-            .within(room_name)
-            .emit(events::CHAT_ROOM_SYNC_ROOM_PROPERTIES, &payload);
+        crate::socket_util::emit_within(
+            socket,
+            room_name,
+            events::CHAT_ROOM_SYNC_ROOM_PROPERTIES,
+            &payload,
+        );
     }
 }
 

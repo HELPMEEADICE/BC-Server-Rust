@@ -66,9 +66,7 @@ pub async fn handle_chat_room_chat(
     }
 
     drop(world);
-    let _ = socket
-        .within(room_name)
-        .emit(events::CHAT_ROOM_MESSAGE, &payload);
+    crate::socket_util::emit_within(&socket, room_name, events::CHAT_ROOM_MESSAGE, &payload);
 }
 
 pub async fn handle_chat_room_game(
@@ -99,9 +97,7 @@ pub async fn handle_chat_room_game(
     let room_name = room.socket_room_name();
     drop(world);
 
-    let _ = socket
-        .within(room_name)
-        .emit(events::CHAT_ROOM_GAME_RESPONSE, &payload);
+    crate::socket_util::emit_within(&socket, room_name, events::CHAT_ROOM_GAME_RESPONSE, &payload);
 }
 
 /// Node `ChatRoomCharacterUpdate`: target by socket `ID`, AllowItem gate, ban check.
@@ -174,9 +170,7 @@ pub async fn handle_character_update(
         "Character": character,
         "SourceMemberNumber": source_member,
     });
-    let _ = socket
-        .within(room_name)
-        .emit(events::CHAT_ROOM_SYNC_SINGLE, &payload);
+    crate::socket_util::emit_within(&socket, room_name, events::CHAT_ROOM_SYNC_SINGLE, &payload);
 }
 
 pub async fn handle_expression_update(
@@ -317,9 +311,7 @@ pub async fn handle_item_update(
         "Item": data,
     });
     // Node: socket.to(room) — exclude source
-    let _ = socket
-        .to(room_name)
-        .emit(events::CHAT_ROOM_SYNC_ITEM, &payload);
+    crate::socket_util::emit_to_room(&socket, room_name, events::CHAT_ROOM_SYNC_ITEM, &payload);
 }
 
 pub async fn handle_map_data_update(
@@ -350,9 +342,7 @@ pub async fn handle_map_data_update(
             "MemberNumber": member,
             "MapData": data,
         });
-        let _ = socket
-            .within(name)
-            .emit(events::CHAT_ROOM_SYNC_MAP_DATA, &payload);
+        crate::socket_util::emit_within(&socket, name, events::CHAT_ROOM_SYNC_MAP_DATA, &payload);
     }
 }
 
@@ -512,5 +502,5 @@ async fn relay_character_field(
 
     let room_name = room.socket_room_name();
     drop(world);
-    let _ = socket.within(room_name).emit(event, &data);
+    crate::socket_util::emit_within(&socket, room_name, event, &data);
 }
