@@ -95,13 +95,10 @@ pub async fn handle_account_ownership(
         }
     };
 
-    // No room: only offline Release is valid
+    // Node requires the owner to be in a chat room, including for an offline release.
     let Some((src_member, src_name, src_account, room_id, room_socket_name, room_members)) =
         room_ctx
     else {
-        if action.as_deref() == Some("Release") {
-            release_offline(&socket, &state, &socket_id, target_mn).await;
-        }
         return;
     };
 
@@ -486,7 +483,7 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
     let _ = state.db.clear_ownership(&account_name).await;
 
     // Online target?
-    let online_target = {
+    let (online_target, target_room_name) = {
         let mut world = state.world.write();
         if let Some(sid) = world.socket_by_member.get(&target_mn).cloned() {
             if let Some(t) = world.get_by_socket_mut(&sid) {
@@ -501,14 +498,33 @@ async fn release_offline(socket: &SocketRef, state: &AppState, socket_id: &str, 
                     &json!({ "ClearOwnership": true }),
                 );
             }
-            true
+            let target_room_name = world
+                .get_by_socket(&sid)
+                .and_then(|target| target.chat_room_id.as_ref())
+                .and_then(|room_id| world.chat_rooms.get(room_id))
+                .map(|room| room.socket_room_name());
+            (true, target_room_name)
         } else {
-            false
+            (false, None)
         }
     };
     if online_target {
         // Node uses the changed account as the sync source, excluding that account.
         sync_character(socket, state, target_mn, target_mn);
+        // When the released submissive is in another room, Node also tells that
+        // client about the release through their current room channel.
+        if let Some(room_name) = target_room_name {
+            room_message(
+                socket,
+                state,
+                &room_name,
+                target_mn,
+                "ReleaseByOwner",
+                "ServerMessage",
+                Some(target_mn),
+                None,
+            );
+        }
     }
 
     if let Some(room_name) = {
