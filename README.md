@@ -81,5 +81,12 @@ Docker Compose still starts MongoDB by default. For SQLite-only, set `DB_BACKEND
 | AllowItem Dom+25 vs target | Done |
 | BlackList room-filtered + ItemPerm 1/2 | Done |
 | Optional SQLite backend | Done |
+| LoginResponse Environment | Done |
+| PasswordReset multi-account email + SMTP error | Done |
+| Admin emit order (Move/Shuffle/Ban/Kick) | Done |
+| AllowItem silent when target not in room | Done |
+| Room name global uniqueness | Done |
+| Create IP day window (no 24h prune) | Done |
+| ConnectInfo peer IP | Done |
 
 Account documents stay flexible JSON for compatibility with existing client DBs.

@@ -165,6 +165,11 @@ impl OnlineAccount {
         map.insert("BlackList".into(), member_list_json(&self.black_list));
         map.insert("FriendList".into(), member_list_json(&self.friend_list));
         map.insert("Lovership".into(), Value::Array(self.lovership.clone()));
+        // Node sets Environment on LoginResponse (AccountGetEnvironment)
+        map.insert(
+            "Environment".into(),
+            Value::String(self.environment.clone()),
+        );
         if let Some(ref o) = self.ownership {
             map.insert("Ownership".into(), o.clone());
         }
@@ -270,6 +275,9 @@ impl OnlineAccount {
             obj.remove("AccountName");
             obj.remove("Password");
             obj.remove("Email");
+            // Node ChatRoom shared character: no Environment; ActivePose only (not Pose)
+            obj.remove("Environment");
+            obj.remove("Pose");
             // Never broadcast private client-only blobs to room peers.
             for key in [
                 "Log",

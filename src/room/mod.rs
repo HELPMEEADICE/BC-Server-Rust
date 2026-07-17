@@ -183,18 +183,13 @@ pub async fn handle_chat_room_search(
 
             let room_name_upper = room.name.to_uppercase();
             if !query.is_empty() {
-                let mut terms = vec![room_name_upper.clone()];
-                if search_descs {
-                    terms.push(room.description.to_uppercase());
+                // Node: roomName UPPER, Query as-is after trim — term.includes(Query)
+                let mut matched = room_name_upper.contains(query.as_str());
+                if !matched && search_descs {
+                    matched = room.description.to_uppercase().contains(query.as_str());
                 }
-                // Node: term.includes(Query) — Query not uppercased; room name is upper
-                if !terms.iter().any(|t| t.contains(&query) || t.contains(&query_upper)) {
-                    // Match Node closely: roomName is upper, Query is as-is after trim
-                    if !room_name_upper.contains(&query) {
-                        if !(search_descs && room.description.to_uppercase().contains(&query)) {
-                            continue;
-                        }
-                    }
+                if !matched {
+                    continue;
                 }
             }
 
@@ -374,7 +369,8 @@ pub async fn handle_chat_room_create(
             leave_room_inner(&mut world, &socket, rid, acc.member_number);
         }
 
-        if world.get_room_by_name(&acc.environment, &req.name).is_some() {
+        // Node: name unique globally (all environments)
+        if world.room_name_exists_any(&req.name) {
             return Err("RoomAlreadyExist");
         }
 
@@ -415,11 +411,11 @@ pub async fn handle_chat_room_create(
                 room.game = g;
             }
         }
+        // Node: invalid Admin → [creator]; valid Admin used as-is (no force-add)
         if let Some(a) = req.admin {
             room.admin = a;
-            if !room.admin.contains(&acc.member_number) {
-                room.admin.push(acc.member_number);
-            }
+        } else {
+            room.admin = vec![acc.member_number];
         }
         if let Some(b) = req.ban {
             room.ban = b;

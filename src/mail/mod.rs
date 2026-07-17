@@ -43,13 +43,16 @@ impl Mailer {
         }
     }
 
+    pub fn smtp_configured(&self) -> bool {
+        self.transport.is_some()
+    }
+
     pub async fn send(&self, to: &str, subject: &str, html: &str) -> Result<()> {
         let Some(transport) = &self.transport else {
-            info!(%to, %subject, "Email skipped (no SMTP credentials)");
-            return Ok(());
+            anyhow::bail!("SMTP not configured");
         };
         if to.is_empty() {
-            return Ok(());
+            anyhow::bail!("empty recipient");
         }
 
         let email = Message::builder()
@@ -64,11 +67,19 @@ impl Mailer {
         Ok(())
     }
 
-    pub async fn send_password_reset(&self, to: &str, account_name: &str, reset_number: &str) -> Result<()> {
-        let html = format!(
-            "Password reset code for account <b>{}</b>:<br/><br/><b>{}</b><br/><br/>If you did not request this, ignore this email.",
-            account_name, reset_number
+    /// Node: one email listing all AccountName + ResetNumber pairs for that address.
+    pub async fn send_password_reset_multi(
+        &self,
+        to: &str,
+        accounts: &[(String, String)],
+    ) -> Result<()> {
+        let mut html = String::from(
+            "To reset your account password, enter your account name and the reset number included in this email.  You need to put these in the Bondage Club password reset screen, with your new password.<br /><br />",
         );
+        for (account_name, reset_number) in accounts {
+            html.push_str(&format!("Account Name: {}<br />", account_name));
+            html.push_str(&format!("Reset Number: {}<br /><br />", reset_number));
+        }
         self.send(to, "Bondage Club Password Reset", &html).await
     }
 

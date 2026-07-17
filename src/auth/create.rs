@@ -40,7 +40,7 @@ pub async fn handle_account_create(
     let ip = client_ip(&socket);
     {
         let mut world = state.world.write();
-        world.prune_old_creation_records();
+        // Node: count all AccountCreationIP entries since process start (no 24h prune)
         let (total, hour) = world.count_creations_for_ip(&ip);
         if total >= state.config.max_ip_account_per_day
             || hour >= state.config.max_ip_account_per_hour
@@ -134,16 +134,23 @@ pub async fn handle_account_create(
 }
 
 pub fn client_ip(socket: &SocketRef) -> String {
-    let remote = socket.req_parts().extensions.get::<String>().cloned();
-    // Prefer peer from transport if available via headers
+    // Prefer ClientIp stored on connect (handlers), then XFF / ConnectInfo
+    if let Some(ip) = socket.extensions.get::<crate::handlers::ClientIp>() {
+        if !ip.0.is_empty() && ip.0 != "unknown" {
+            return ip.0.clone();
+        }
+    }
     let xff = socket
         .req_parts()
         .headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok());
-    // socketioxide may not expose remote address the same way; use XFF or fallback
-    let remote_str = remote.as_deref();
-    extract_ip(remote_str, xff)
+    let remote = socket
+        .req_parts()
+        .extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0.ip().to_string());
+    extract_ip(remote.as_deref(), xff)
 }
 
 pub fn account_environment(socket: &SocketRef, config: &Config) -> String {

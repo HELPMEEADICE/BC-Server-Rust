@@ -144,7 +144,10 @@ async fn main() -> anyhow::Result<()> {
     // Graceful shutdown on Ctrl+C / SIGTERM
     let io_shutdown = io.clone();
     let st_shutdown = state.clone();
-    axum::serve(listener, app)
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             info!("Shutdown signal received");

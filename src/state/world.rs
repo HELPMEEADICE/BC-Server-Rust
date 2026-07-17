@@ -112,6 +112,14 @@ impl World {
             .and_then(|id| self.chat_rooms.get(id))
     }
 
+    /// Node: room names are unique globally (case-insensitive), not per environment.
+    pub fn room_name_exists_any(&self, name: &str) -> bool {
+        let upper = name.to_uppercase();
+        self.chat_rooms
+            .values()
+            .any(|r| r.name.to_uppercase() == upper)
+    }
+
     pub fn insert_room(&mut self, room: ChatRoom) {
         let key = Self::room_key(&room.environment, &room.name);
         self.room_by_name_env.insert(key, room.id.clone());
@@ -144,11 +152,7 @@ impl World {
         }
     }
 
-    pub fn prune_old_creation_records(&mut self) {
-        let cutoff = common_time() - 86_400_000;
-        self.account_creation_ip.retain(|r| r.time >= cutoff);
-    }
-
+    /// Node never prunes AccountCreationIP; total = all-time since process start.
     pub fn count_creations_for_ip(&self, ip: &str) -> (usize, usize) {
         let now = common_time();
         let mut total = 0;

@@ -91,31 +91,66 @@ fn emit_effects(socket: &SocketRef, state: &AppState, e: AdminEffects) {
     if let Some(code) = e.update_resp {
         let _ = socket.emit(events::CHAT_ROOM_UPDATE_RESPONSE, &code);
     }
-    // Kick/Ban response to target first (Node order), then action already sent in leave_room_inner_reason
+    // Node order: RoomBanned/RoomKicked first, then leave message already done in apply
     if let Some((sid, code)) = e.kick {
         if let Some(io) = state.io.get() {
             crate::socket_util::emit_to(io, &sid, events::CHAT_ROOM_SEARCH_RESPONSE, &code);
         }
     }
-    if let Some((room_name, order)) = e.reorder {
-        crate::socket_util::emit_within(
-            socket,
-            room_name,
-            events::CHAT_ROOM_SYNC_REORDER_PLAYERS,
-            &order,
-        );
-    }
-    if let Some((room_name, sender, content, dict)) = e.action {
-        room_message(
-            socket,
-            state,
-            &room_name,
-            sender,
-            &content,
-            "Action",
-            None,
-            Some(dict),
-        );
+    // Node Move/Shuffle: Action then Reorder; Swap: Reorder then Action
+    let action_before_reorder = e
+        .action
+        .as_ref()
+        .map(|(_, _, content, _)| {
+            matches!(
+                content.as_str(),
+                "ServerMoveLeft" | "ServerMoveRight" | "ServerShuffle"
+            )
+        })
+        .unwrap_or(false);
+
+    if action_before_reorder {
+        if let Some((room_name, sender, content, dict)) = e.action {
+            room_message(
+                socket,
+                state,
+                &room_name,
+                sender,
+                &content,
+                "Action",
+                None,
+                Some(dict),
+            );
+        }
+        if let Some((room_name, order)) = e.reorder {
+            crate::socket_util::emit_within(
+                socket,
+                room_name,
+                events::CHAT_ROOM_SYNC_REORDER_PLAYERS,
+                &order,
+            );
+        }
+    } else {
+        if let Some((room_name, order)) = e.reorder {
+            crate::socket_util::emit_within(
+                socket,
+                room_name,
+                events::CHAT_ROOM_SYNC_REORDER_PLAYERS,
+                &order,
+            );
+        }
+        if let Some((room_name, sender, content, dict)) = e.action {
+            room_message(
+                socket,
+                state,
+                &room_name,
+                sender,
+                &content,
+                "Action",
+                None,
+                Some(dict),
+            );
+        }
     }
     if let Some((room_name, payload)) = e.props {
         crate::socket_util::emit_within(
@@ -156,7 +191,7 @@ fn apply_update(
     };
 
     if !is_chat_room_name(&name)
-        || description.len() > CHAT_ROOM_DESCRIPTION_MAX_LENGTH
+        || description.chars().count() > CHAT_ROOM_DESCRIPTION_MAX_LENGTH
         || background.len() > 100
     {
         return AdminEffects {
@@ -193,9 +228,8 @@ fn apply_update(
         .get(room_id)
         .map(|r| r.name.clone())
         .unwrap_or_default();
-    if old_name.to_uppercase() != name.to_uppercase()
-        && world.get_room_by_name(&acc.environment, &name).is_some()
-    {
+    // Node: room name unique globally across all environments
+    if old_name.to_uppercase() != name.to_uppercase() && world.room_name_exists_any(&name) {
         return AdminEffects {
             update_resp: Some("RoomAlreadyExist"),
             ..AdminEffects::empty()
@@ -414,6 +448,12 @@ fn apply_member_or_offline(
                         r.ban.push(target_mn);
                     }
                 }
+                // Emit RoomBanned before leave (Node order)
+                if let Some(ref sid) = target_sid {
+                    if let Some(ts) = crate::socket_util::get_socket_from_ref(socket, sid) {
+                        let _ = ts.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"RoomBanned");
+                    }
+                }
                 let dict = source_target_dict(acc, target_mn, &target_name);
                 leave_room_inner_reason(
                     world,
@@ -424,12 +464,15 @@ fn apply_member_or_offline(
                     Some("ServerBan"),
                     Some(dict),
                 );
-                let mut e = props_effect(world, room_id, acc.member_number);
-                e.kick = target_sid.map(|sid| (sid, "RoomBanned"));
-                e
+                props_effect(world, room_id, acc.member_number)
             }
             "Kick" => {
                 // Node: RoomKicked → ChatRoomRemove(ServerKick) — no room props sync
+                if let Some(ref sid) = target_sid {
+                    if let Some(ts) = crate::socket_util::get_socket_from_ref(socket, sid) {
+                        let _ = ts.emit(events::CHAT_ROOM_SEARCH_RESPONSE, &"RoomKicked");
+                    }
+                }
                 let dict = source_target_dict(acc, target_mn, &target_name);
                 leave_room_inner_reason(
                     world,
@@ -440,9 +483,7 @@ fn apply_member_or_offline(
                     Some("ServerKick"),
                     Some(dict),
                 );
-                let mut e = AdminEffects::empty();
-                e.kick = target_sid.map(|sid| (sid, "RoomKicked"));
-                e
+                AdminEffects::empty()
             }
             "MoveLeft" if a > 0 => {
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
@@ -496,10 +537,16 @@ fn apply_member_or_offline(
                 }
             }
             "Promote" => {
+                let already = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.admin.contains(&target_mn))
+                    .unwrap_or(true);
+                if already {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
-                    if !r.admin.contains(&target_mn) {
-                        r.admin.push(target_mn);
-                    }
+                    r.admin.push(target_mn);
                 }
                 promote_demote_effect(
                     world,
@@ -511,6 +558,15 @@ fn apply_member_or_offline(
                 )
             }
             "Demote" => {
+                // Node only demotes if target is currently admin
+                let is_admin = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.admin.contains(&target_mn))
+                    .unwrap_or(false);
+                if !is_admin {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
                     r.admin.retain(|&m| m != target_mn);
                 }
@@ -524,10 +580,16 @@ fn apply_member_or_offline(
                 )
             }
             "Whitelist" => {
+                let already = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.whitelist.contains(&target_mn))
+                    .unwrap_or(true);
+                if already {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
-                    if !r.whitelist.contains(&target_mn) {
-                        r.whitelist.push(target_mn);
-                    }
+                    r.whitelist.push(target_mn);
                 }
                 promote_demote_effect(
                     world,
@@ -539,6 +601,15 @@ fn apply_member_or_offline(
                 )
             }
             "Unwhitelist" => {
+                // Node only unwhitelists if target is currently listed
+                let listed = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.whitelist.contains(&target_mn))
+                    .unwrap_or(false);
+                if !listed {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
                     r.whitelist.retain(|&m| m != target_mn);
                 }
@@ -554,31 +625,59 @@ fn apply_member_or_offline(
             _ => AdminEffects::empty(),
         }
     } else {
-        // Not in room: Ban / Unban / Whitelist / Unwhitelist silent
+        // Not in room: Ban / Unban / Whitelist / Unwhitelist silent (only if list changes)
         match action {
             "Ban" => {
+                let already = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.ban.contains(&target_mn))
+                    .unwrap_or(true);
+                if already {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
-                    if !r.ban.contains(&target_mn) {
-                        r.ban.push(target_mn);
-                    }
+                    r.ban.push(target_mn);
                 }
                 props_effect(world, room_id, acc.member_number)
             }
             "Unban" => {
+                let listed = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.ban.contains(&target_mn))
+                    .unwrap_or(false);
+                if !listed {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
                     r.ban.retain(|&m| m != target_mn);
                 }
                 props_effect(world, room_id, acc.member_number)
             }
             "Whitelist" => {
+                let already = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.whitelist.contains(&target_mn))
+                    .unwrap_or(true);
+                if already {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
-                    if !r.whitelist.contains(&target_mn) {
-                        r.whitelist.push(target_mn);
-                    }
+                    r.whitelist.push(target_mn);
                 }
                 props_effect(world, room_id, acc.member_number)
             }
             "Unwhitelist" => {
+                let listed = world
+                    .chat_rooms
+                    .get(room_id)
+                    .map(|r| r.whitelist.contains(&target_mn))
+                    .unwrap_or(false);
+                if !listed {
+                    return AdminEffects::empty();
+                }
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
                     r.whitelist.retain(|&m| m != target_mn);
                 }
@@ -614,7 +713,7 @@ fn move_effect(
             room.socket_room_name(),
             acc.member_number,
             content.into(),
-            source_target_dict(acc, target_mn, target_name),
+            move_source_target_dict(acc, target_mn, target_name),
         ));
     }
     e
@@ -661,9 +760,18 @@ fn props_effect(world: &crate::state::World, room_id: &str, source: i64) -> Admi
     }
 }
 
+/// Ban/Kick/Promote/etc: SourceCharacter then TargetCharacterName (Node).
 fn source_target_dict(acc: &OnlineAccount, target_mn: i64, target_name: &str) -> Value {
     json!([
         { "Tag": "SourceCharacter", "Text": acc.name, "MemberNumber": acc.member_number },
         { "Tag": "TargetCharacterName", "Text": target_name, "MemberNumber": target_mn },
+    ])
+}
+
+/// MoveLeft/Right: TargetCharacterName then SourceCharacter (Node).
+fn move_source_target_dict(acc: &OnlineAccount, target_mn: i64, target_name: &str) -> Value {
+    json!([
+        { "Tag": "TargetCharacterName", "Text": target_name, "MemberNumber": target_mn },
+        { "Tag": "SourceCharacter", "Text": acc.name, "MemberNumber": acc.member_number },
     ])
 }

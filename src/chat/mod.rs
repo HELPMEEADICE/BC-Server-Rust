@@ -24,11 +24,12 @@ pub async fn handle_chat_room_chat(
         return;
     }
 
-    // Node: data.Content.trim() before length check
-    let content = msg.content.as_deref().unwrap_or("").trim().to_string();
-    if content.len() > CHAT_MESSAGE_MAX_LENGTH {
+    // Node: length check on raw Content, then trim
+    let raw = msg.content.as_deref().unwrap_or("");
+    if raw.len() > CHAT_MESSAGE_MAX_LENGTH {
         return;
     }
+    let content = raw.trim().to_string();
 
     let socket_id = socket.id.to_string();
     let world = state.world.read();
@@ -247,8 +248,8 @@ pub async fn handle_pose_update(
         let Some(acc) = world.get_by_socket_mut(&socket_id) else {
             return;
         };
+        // Node sets ActivePose only
         acc.active_pose = Some(pose.clone());
-        acc.pose = Some(pose.clone());
         let member = acc.member_number;
         let room_id = acc.chat_room_id.clone();
         let room_name =
@@ -422,28 +423,29 @@ pub async fn handle_allow_item(
     let Some(src) = world.get_by_socket(&socket_id) else {
         return;
     };
-    // Node only checks accounts in the same room
+    // Node: only emit when target is found in the same room; otherwise silent
     let allow = if let Some(ref room_id) = src.chat_room_id {
         if let Some(room) = world.chat_rooms.get(room_id) {
             if room.members.contains(&target_mn) {
                 world
                     .get_by_member(target_mn)
                     .map(|t| chat_room_get_allow_item(src, t))
-                    .unwrap_or(false)
             } else {
-                false
+                None
             }
         } else {
-            false
+            None
         }
     } else {
-        false
+        None
     };
     drop(world);
-    let _ = socket.emit(
-        events::CHAT_ROOM_ALLOW_ITEM,
-        &json!({ "MemberNumber": target_mn, "AllowItem": allow }),
-    );
+    if let Some(allow) = allow {
+        let _ = socket.emit(
+            events::CHAT_ROOM_ALLOW_ITEM,
+            &json!({ "MemberNumber": target_mn, "AllowItem": allow }),
+        );
+    }
 }
 
 /// Item permission levels 0–5 (mirrors Node `ChatRoomGetAllowItem`).

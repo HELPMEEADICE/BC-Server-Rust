@@ -22,8 +22,13 @@ pub fn on_connection(socket: SocketRef, state: AppState) {
             .headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok());
-        // Prefer last hop of XFF; fall back to connection peer if available via extensions later
-        extract_ip(None, xff)
+        // Prefer last hop of XFF; fall back to ConnectInfo peer address
+        let remote = socket
+            .req_parts()
+            .extensions
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|c| c.0.ip().to_string());
+        extract_ip(remote.as_deref(), xff)
     };
 
     {
