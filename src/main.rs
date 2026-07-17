@@ -177,8 +177,45 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
+    let console_stop = console_commands();
+
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+        _ = console_stop => {},
+    }
+}
+
+/// Read terminal console commands from stdin.
+/// Currently supports: `/stop` — graceful server shutdown.
+async fn console_commands() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let stdin = tokio::io::stdin();
+    let mut lines = BufReader::new(stdin).lines();
+    info!("Console ready. Type /stop to shut down the server.");
+
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                let cmd = line.trim();
+                if cmd.is_empty() {
+                    continue;
+                }
+                if cmd.eq_ignore_ascii_case("/stop") {
+                    info!("Console command /stop received");
+                    return;
+                }
+                info!(%cmd, "Unknown console command (try /stop)");
+            }
+            Ok(None) => {
+                // stdin closed (e.g. daemon/docker) — do not treat as shutdown
+                std::future::pending::<()>().await;
+            }
+            Err(err) => {
+                tracing::warn!(%err, "Console stdin error; console commands disabled");
+                std::future::pending::<()>().await;
+            }
+        }
     }
 }
