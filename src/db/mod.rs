@@ -43,6 +43,13 @@ impl Db {
         Ok(Self { inner })
     }
 
+    pub async fn close(&self) -> Result<()> {
+        match &self.inner {
+            DbInner::Mongo(_) => Ok(()),
+            DbInner::Sqlite(db) => db.close().await,
+        }
+    }
+
     pub async fn next_member_number(&self) -> Result<MemberNumber> {
         match &self.inner {
             DbInner::Mongo(db) => db.next_member_number().await,
@@ -57,10 +64,21 @@ impl Db {
         }
     }
 
-    pub async fn find_by_member_number(&self, member_number: MemberNumber) -> Result<Option<Value>> {
+    pub async fn find_by_member_number(
+        &self,
+        member_number: MemberNumber,
+    ) -> Result<Option<Value>> {
         match &self.inner {
             DbInner::Mongo(db) => db.find_by_member_number(member_number).await,
             DbInner::Sqlite(db) => db.find_by_member_number(member_number).await,
+        }
+    }
+
+    /// Returns only non-sensitive fields required to render public prison listings.
+    pub async fn list_public_prison_data(&self) -> Result<Vec<Value>> {
+        match &self.inner {
+            DbInner::Mongo(db) => db.list_public_prison_data().await,
+            DbInner::Sqlite(db) => db.list_public_prison_data().await,
         }
     }
 

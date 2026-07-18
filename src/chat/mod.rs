@@ -107,7 +107,12 @@ pub async fn handle_chat_room_game(
     let room_name = room.socket_room_name();
     drop(world);
 
-    crate::socket_util::emit_within(&socket, room_name, events::CHAT_ROOM_GAME_RESPONSE, &payload);
+    crate::socket_util::emit_within(
+        &socket,
+        room_name,
+        events::CHAT_ROOM_GAME_RESPONSE,
+        &payload,
+    );
 }
 
 /// Node `ChatRoomCharacterUpdate`: target by socket `ID`, AllowItem gate, ban check.
@@ -292,7 +297,11 @@ pub async fn handle_arousal_update(
             return;
         };
         // Node: only if ArousalSettings already exists
-        let Some(settings) = acc.arousal_settings.as_mut().and_then(|v| v.as_object_mut()) else {
+        let Some(settings) = acc
+            .arousal_settings
+            .as_mut()
+            .and_then(|v| v.as_object_mut())
+        else {
             return;
         };
         for key in ["OrgasmTimer", "OrgasmCount", "Progress", "ProgressTimer"] {
@@ -468,11 +477,7 @@ pub fn chat_room_get_allow_item(
 
     // Owner always allowed
     if let Some(ref ownership) = target.ownership {
-        if ownership
-            .get("MemberNumber")
-            .and_then(|v| v.as_i64())
-            == Some(source.member_number)
-        {
+        if ownership.get("MemberNumber").and_then(|v| v.as_i64()) == Some(source.member_number) {
             return true;
         }
     }
@@ -530,11 +535,9 @@ fn dominant_value(acc: &crate::state::OnlineAccount) -> i64 {
         .and_then(|arr| {
             arr.iter().find_map(|e| {
                 if e.get("Type").and_then(|t| t.as_str()) == Some("Dominant") {
-                    e.get("Value").and_then(|v| v.as_i64()).or_else(|| {
-                        e.get("Value")
-                            .and_then(|v| v.as_f64())
-                            .map(|f| f as i64)
-                    })
+                    e.get("Value")
+                        .and_then(|v| v.as_i64())
+                        .or_else(|| e.get("Value").and_then(|v| v.as_f64()).map(|f| f as i64))
                 } else {
                     None
                 }

@@ -4,8 +4,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{Map, Value};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Row, SqlitePool};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
+use sqlx::{Connection, Row, SqlitePool};
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -16,6 +18,7 @@ use crate::util::merge_set_into_object;
 #[derive(Clone)]
 pub struct SqliteDb {
     pool: Arc<SqlitePool>,
+    connect_url: String,
     /// Serialize read-modify-write account updates (WAL still errors with BUSY_SNAPSHOT
     /// when concurrent transactions write the same row).
     write_lock: Arc<Mutex<()>>,
@@ -43,11 +46,50 @@ impl SqliteDb {
 
         let db = Self {
             pool: Arc::new(pool),
+            connect_url,
             write_lock: Arc::new(Mutex::new(())),
         };
         db.migrate().await?;
         info!(url = %config.database_url, "SQLite connected");
         Ok(db)
+    }
+
+    pub async fn close(&self) -> Result<()> {
+        let _write_guard = self.write_lock.lock().await;
+        self.pool.close().await;
+
+        let options = self
+            .connect_url
+            .parse::<SqliteConnectOptions>()
+            .context("parse SQLite DATABASE_URL during shutdown")?
+            .busy_timeout(Duration::from_secs(5));
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .context("open SQLite shutdown connection")?;
+        let cleanup_result = async {
+            let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(&mut connection)
+                .await
+                .context("checkpoint SQLite WAL")?;
+            let busy: i64 = row.try_get(0).context("read SQLite checkpoint status")?;
+            if busy != 0 {
+                bail!("SQLite WAL checkpoint could not finish because the database is busy");
+            }
+
+            let row = sqlx::query("PRAGMA journal_mode=DELETE")
+                .fetch_one(&mut connection)
+                .await
+                .context("disable SQLite WAL mode")?;
+            let journal_mode: String = row.try_get(0).context("read SQLite journal mode")?;
+            if !journal_mode.eq_ignore_ascii_case("delete") {
+                bail!("SQLite remained in {journal_mode} journal mode during shutdown");
+            }
+            Ok(())
+        }
+        .await;
+        let close_result = connection.close().await.context("close SQLite database");
+        cleanup_result?;
+        close_result
     }
 
     async fn migrate(&self) -> Result<()> {
@@ -105,7 +147,10 @@ impl SqliteDb {
         Ok(row.map(|r| row_to_json(&r)).transpose()?)
     }
 
-    pub async fn find_by_member_number(&self, member_number: MemberNumber) -> Result<Option<Value>> {
+    pub async fn find_by_member_number(
+        &self,
+        member_number: MemberNumber,
+    ) -> Result<Option<Value>> {
         let row = sqlx::query(
             r#"
             SELECT account_name, email, password, member_number, name, last_login, creation, data_json
@@ -118,13 +163,48 @@ impl SqliteDb {
         Ok(row.map(|r| row_to_json(&r)).transpose()?)
     }
 
-    pub async fn find_email_by_account_name(&self, account_name: &str) -> Result<Option<String>> {
-        let row = sqlx::query(
-            "SELECT email FROM accounts WHERE account_name = ?1 COLLATE NOCASE",
+    /// Reads just enough account state to build a public prison listing. It never
+    /// returns stored credentials, email, money, logs, or account names.
+    pub async fn list_public_prison_data(&self) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT member_number, name, last_login, data_json
+            FROM accounts
+            "#,
         )
-        .bind(account_name)
-        .fetch_optional(self.pool.as_ref())
+        .fetch_all(self.pool.as_ref())
         .await?;
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let data_json: String = row.try_get("data_json")?;
+            let data: Value = serde_json::from_str(&data_json).context("parse data_json")?;
+            let mut public = Map::new();
+            if let Some(member) = row.try_get::<Option<i64>, _>("member_number")? {
+                public.insert("MemberNumber".into(), Value::Number(member.into()));
+            }
+            if let Some(name) = row.try_get::<Option<String>, _>("name")? {
+                public.insert("Name".into(), Value::String(name));
+            }
+            if let Some(last_login) = row.try_get::<Option<i64>, _>("last_login")? {
+                public.insert("LastLogin".into(), Value::Number(last_login.into()));
+            }
+            if let Some(source) = data.as_object() {
+                for key in ["ExtensionSettings", "PrivateCharacter"] {
+                    if let Some(value) = source.get(key) {
+                        public.insert(key.into(), value.clone());
+                    }
+                }
+            }
+            result.push(Value::Object(public));
+        }
+        Ok(result)
+    }
+
+    pub async fn find_email_by_account_name(&self, account_name: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT email FROM accounts WHERE account_name = ?1 COLLATE NOCASE")
+            .bind(account_name)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
         Ok(row.and_then(|r| r.try_get::<Option<String>, _>("email").ok().flatten()))
     }
 
@@ -264,12 +344,10 @@ impl SqliteDb {
         member_number: MemberNumber,
         set: Map<String, Value>,
     ) -> Result<()> {
-        let row = sqlx::query(
-            "SELECT account_name FROM accounts WHERE member_number = ?1",
-        )
-        .bind(member_number)
-        .fetch_optional(self.pool.as_ref())
-        .await?;
+        let row = sqlx::query("SELECT account_name FROM accounts WHERE member_number = ?1")
+            .bind(member_number)
+            .fetch_optional(self.pool.as_ref())
+            .await?;
         let Some(row) = row else {
             return Ok(());
         };
@@ -400,7 +478,10 @@ fn merge_row_with_set(
 
     // Re-apply protected columns if the update payload did not include them.
     if !set.contains_key("AccountName") {
-        obj.insert("AccountName".into(), Value::String(account_name_col.clone()));
+        obj.insert(
+            "AccountName".into(),
+            Value::String(account_name_col.clone()),
+        );
     }
     if !set.contains_key("Password") {
         obj.insert("Password".into(), Value::String(password_col.clone()));

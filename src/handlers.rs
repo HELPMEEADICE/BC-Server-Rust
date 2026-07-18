@@ -65,9 +65,18 @@ pub fn on_connection(socket: SocketRef, state: AppState) {
     }
 
     // Pre-login only (Node parity). Rate limit applied inside each handler.
-    socket.on(events::ACCOUNT_CREATE, rate_limited(auth::handle_account_create));
-    socket.on(events::ACCOUNT_LOGIN, rate_limited(auth::handle_account_login));
-    socket.on(events::PASSWORD_RESET, rate_limited(auth::handle_password_reset));
+    socket.on(
+        events::ACCOUNT_CREATE,
+        rate_limited(auth::handle_account_create),
+    );
+    socket.on(
+        events::ACCOUNT_LOGIN,
+        rate_limited(auth::handle_account_login),
+    );
+    socket.on(
+        events::PASSWORD_RESET,
+        rate_limited(auth::handle_password_reset),
+    );
     socket.on(
         events::PASSWORD_RESET_PROCESS,
         rate_limited(auth::handle_password_reset_process),
@@ -232,7 +241,7 @@ async fn on_disconnect_cleanup(state: &AppState, socket_id: &str, ip: &str) {
         }
     }
 
-    {
+    let changed_sectors = {
         let mut world = state.world.write();
         // Snapshot room before remove so we can notify peers (Node ChatRoomRemove ServerDisconnect)
         let room_leave = world.get_by_socket(socket_id).and_then(|acc| {
@@ -249,10 +258,17 @@ async fn on_disconnect_cleanup(state: &AppState, socket_id: &str, ip: &str) {
                 "ServerDisconnect",
             );
         }
-        if let Some(acc) = world.remove_account(socket_id) {
+        let changed_sectors = if let Some((acc, sessions)) = world.remove_account(socket_id) {
             info!(account = %acc.account_name, "Account disconnected");
-        }
+            sessions
+        } else {
+            Vec::new()
+        };
         on_ip_disconnect(&mut world, ip);
+        changed_sectors
+    };
+    for (host_member_number, sector_index) in changed_sectors {
+        account::emit_prison_sector_sync(state, host_member_number, sector_index);
     }
 }
 
@@ -276,10 +292,7 @@ pub fn broadcast_server_info(io: &SocketIo, state: &AppState) {
 
 pub async fn graceful_shutdown_message(io: &SocketIo) {
     let _ = io
-        .emit(
-            events::SERVER_MESSAGE,
-            &"Server will reboot in 30 seconds.",
-        )
+        .emit(events::SERVER_MESSAGE, &"Server will reboot in 30 seconds.")
         .await;
 }
 

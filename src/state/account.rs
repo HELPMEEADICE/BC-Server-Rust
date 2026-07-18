@@ -149,17 +149,20 @@ impl OnlineAccount {
     pub fn to_login_response(&self) -> Value {
         let mut map = serde_json::Map::new();
         map.insert("ID".into(), Value::String(self.socket_id.clone()));
-        map.insert("AccountName".into(), Value::String(self.account_name.clone()));
+        map.insert(
+            "AccountName".into(),
+            Value::String(self.account_name.clone()),
+        );
         map.insert("MemberNumber".into(), json_num(self.member_number));
         map.insert("Name".into(), Value::String(self.name.clone()));
         map.insert("Creation".into(), json_num(self.creation));
-        map.insert("ItemPermission".into(), json_num(self.item_permission as i64));
+        map.insert(
+            "ItemPermission".into(),
+            json_num(self.item_permission as i64),
+        );
         // Node always includes AssetFamily on shared/login character data
         if !self.extra.contains_key("AssetFamily") {
-            map.insert(
-                "AssetFamily".into(),
-                Value::String("Female3DCG".into()),
-            );
+            map.insert("AssetFamily".into(), Value::String("Female3DCG".into()));
         }
         map.insert("WhiteList".into(), member_list_json(&self.white_list));
         map.insert("BlackList".into(), member_list_json(&self.black_list));

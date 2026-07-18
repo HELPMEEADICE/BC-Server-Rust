@@ -19,6 +19,15 @@ pub struct PasswordResetEntry {
     pub reset_number: String,
 }
 
+/// Live members currently rendering the same Underground Prison sector. This is
+/// deliberately independent from ChatRoom: the sector remains its own screen.
+#[derive(Debug, Clone)]
+pub struct PrisonSectorSession {
+    pub host_member_number: MemberNumber,
+    pub sector_index: usize,
+    pub members: HashSet<MemberNumber>,
+}
+
 /// Global process state (single instance, in-memory rooms/sessions).
 pub struct World {
     pub accounts_by_socket: HashMap<String, OnlineAccount>,
@@ -26,6 +35,7 @@ pub struct World {
     pub socket_by_account_name: HashMap<String, String>,
     pub chat_rooms: HashMap<String, ChatRoom>,
     pub room_by_name_env: HashMap<String, String>, // "ENV:name" -> room id
+    pub prison_sector_sessions: HashMap<String, PrisonSectorSession>, // "host:sector" -> live view
     pub ip_connections: HashMap<String, VecDeque<i64>>,
     pub account_creation_ip: Vec<AccountCreationRecord>,
     pub password_resets: Vec<PasswordResetEntry>,
@@ -44,6 +54,7 @@ impl World {
             socket_by_account_name: HashMap::new(),
             chat_rooms: HashMap::new(),
             room_by_name_env: HashMap::new(),
+            prison_sector_sessions: HashMap::new(),
             ip_connections: HashMap::new(),
             account_creation_ip: Vec::new(),
             password_resets: Vec::new(),
@@ -85,12 +96,25 @@ impl World {
         self.accounts_by_socket.insert(socket_id, account);
     }
 
-    pub fn remove_account(&mut self, socket_id: &str) -> Option<OnlineAccount> {
+    /// Removes an online account and returns each sector whose membership changed.
+    /// Callers emit the sector snapshots only after releasing the world lock.
+    pub fn remove_account(
+        &mut self,
+        socket_id: &str,
+    ) -> Option<(OnlineAccount, Vec<(MemberNumber, usize)>)> {
         if let Some(acc) = self.accounts_by_socket.remove(socket_id) {
             self.socket_by_member.remove(&acc.member_number);
             self.socket_by_account_name.remove(&acc.account_name);
             self.login_pending.remove(socket_id);
-            Some(acc)
+            let mut changed_sessions = Vec::new();
+            for session in self.prison_sector_sessions.values_mut() {
+                if session.members.remove(&acc.member_number) {
+                    changed_sessions.push((session.host_member_number, session.sector_index));
+                }
+            }
+            self.prison_sector_sessions
+                .retain(|_, session| !session.members.is_empty());
+            Some((acc, changed_sessions))
         } else {
             self.login_pending.remove(socket_id);
             None

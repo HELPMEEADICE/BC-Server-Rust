@@ -211,6 +211,8 @@ pub mod events {
     pub const ACCOUNT_LOVERSHIP: &str = "AccountLovership";
     pub const ACCOUNT_OWNERSHIP: &str = "AccountOwnership";
     pub const ACCOUNT_BEEP: &str = "AccountBeep";
+    pub const PRISON_RENTAL_SYNC: &str = "PrisonRentalSync";
+    pub const PRISON_SECTOR_SYNC: &str = "PrisonSectorSync";
     pub const CHAT_ROOM_SEARCH_RESULT: &str = "ChatRoomSearchResult";
     pub const CHAT_ROOM_CREATE_RESPONSE: &str = "ChatRoomCreateResponse";
     pub const CHAT_ROOM_SEARCH_RESPONSE: &str = "ChatRoomSearchResponse";

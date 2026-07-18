@@ -60,7 +60,8 @@ impl Config {
             database_url,
             database_name: env::var("DATABASE_NAME")
                 .unwrap_or_else(|_| "BondageClubDatabase".into()),
-            account_collection: env::var("ACCOUNT_COLLECTION").unwrap_or_else(|_| "Accounts".into()),
+            account_collection: env::var("ACCOUNT_COLLECTION")
+                .unwrap_or_else(|_| "Accounts".into()),
             port: env::var("PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())

@@ -68,12 +68,36 @@ impl MongoDb {
         Ok(result.map(document_to_json))
     }
 
-    pub async fn find_by_member_number(&self, member_number: MemberNumber) -> Result<Option<Value>> {
+    pub async fn find_by_member_number(
+        &self,
+        member_number: MemberNumber,
+    ) -> Result<Option<Value>> {
         let result = self
             .accounts
             .find_one(doc! { "MemberNumber": member_number })
             .await?;
         Ok(result.map(document_to_json))
+    }
+
+    /// Mongo projection deliberately excludes credentials and all other private data.
+    pub async fn list_public_prison_data(&self) -> Result<Vec<Value>> {
+        let mut cursor = self
+            .accounts
+            .find(doc! {})
+            .projection(doc! {
+                "_id": 0,
+                "MemberNumber": 1,
+                "Name": 1,
+                "LastLogin": 1,
+                "ExtensionSettings": 1,
+                "PrivateCharacter": 1,
+            })
+            .await?;
+        let mut accounts = Vec::new();
+        while let Some(doc) = cursor.try_next().await? {
+            accounts.push(document_to_json(doc));
+        }
+        Ok(accounts)
     }
 
     pub async fn find_email_by_account_name(&self, account_name: &str) -> Result<Option<String>> {
@@ -114,7 +138,10 @@ impl MongoDb {
             return Ok(());
         }
         self.accounts
-            .update_one(doc! { "AccountName": account_name }, doc! { "$set": set_doc })
+            .update_one(
+                doc! { "AccountName": account_name },
+                doc! { "$set": set_doc },
+            )
             .await?;
         Ok(())
     }

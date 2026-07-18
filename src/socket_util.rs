@@ -34,7 +34,12 @@ fn owned_payload(data: &impl Serialize) -> Value {
 
 /// Broadcast to everyone in `room` (including the calling socket).
 /// socketioxide broadcast `emit` returns a Future that must be polled.
-pub fn emit_within(socket: &SocketRef, room: impl Into<String>, event: &str, data: &impl Serialize) {
+pub fn emit_within(
+    socket: &SocketRef,
+    room: impl Into<String>,
+    event: &str,
+    data: &impl Serialize,
+) {
     let socket = socket.clone();
     let room = room.into();
     let event = event.to_string();
@@ -45,7 +50,12 @@ pub fn emit_within(socket: &SocketRef, room: impl Into<String>, event: &str, dat
 }
 
 /// Broadcast to everyone in `room` except the calling socket (Node `socket.to(room)`).
-pub fn emit_to_room(socket: &SocketRef, room: impl Into<String>, event: &str, data: &impl Serialize) {
+pub fn emit_to_room(
+    socket: &SocketRef,
+    room: impl Into<String>,
+    event: &str,
+    data: &impl Serialize,
+) {
     let socket = socket.clone();
     let room = room.into();
     let event = event.to_string();

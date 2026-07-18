@@ -41,7 +41,11 @@ pub async fn handle_password_reset(
     let now = common_time();
     {
         let world = state.world.read();
-        if now < world.next_password_reset_at.load(std::sync::atomic::Ordering::SeqCst) {
+        if now
+            < world
+                .next_password_reset_at
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
             let _ = socket.emit(events::PASSWORD_RESET_RESPONSE, &codes::RETRY_LATER);
             return;
         }
@@ -131,9 +135,10 @@ pub async fn handle_password_reset_process(
 
     let valid = {
         let world = state.world.read();
-        world.password_resets.iter().any(|e| {
-            e.account_name == account_name && e.reset_number == req.reset_number
-        })
+        world
+            .password_resets
+            .iter()
+            .any(|e| e.account_name == account_name && e.reset_number == req.reset_number)
     };
 
     if !valid {

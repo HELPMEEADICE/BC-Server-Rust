@@ -92,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Periodic ServerInfo (60s) + delayed DB flush (300s)
-    {
+    let server_info_task = {
         let io_info = io.clone();
         let st = state.clone();
         tokio::spawn(async move {
@@ -100,10 +100,11 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 handlers::broadcast_server_info(&io_info, &st);
+                account::expire_prison_sector_rentals(&st).await;
             }
-        });
-    }
-    {
+        })
+    };
+    let delayed_flush_task = {
         let st = state.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(300));
@@ -111,8 +112,8 @@ async fn main() -> anyhow::Result<()> {
                 interval.tick().await;
                 account::flush_delayed_updates(&st).await;
             }
-        });
-    }
+        })
+    };
 
     let cors = if config.cors_origins.is_empty() {
         CorsLayer::new()
@@ -144,17 +145,26 @@ async fn main() -> anyhow::Result<()> {
     // Graceful shutdown on Ctrl+C / SIGTERM
     let io_shutdown = io.clone();
     let st_shutdown = state.clone();
-    axum::serve(
+    let serve_result = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            info!("Shutdown signal received");
-            account::flush_delayed_updates(&st_shutdown).await;
-            handlers::graceful_shutdown_message(&io_shutdown).await;
-        })
-        .await?;
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        info!("Shutdown signal received");
+        account::flush_delayed_updates(&st_shutdown).await;
+        handlers::graceful_shutdown_message(&io_shutdown).await;
+    })
+    .await;
+
+    server_info_task.abort();
+    delayed_flush_task.abort();
+    let _ = server_info_task.await;
+    let _ = delayed_flush_task.await;
+    let db_close_result = state.db.close().await;
+
+    serve_result?;
+    db_close_result?;
 
     Ok(())
 }

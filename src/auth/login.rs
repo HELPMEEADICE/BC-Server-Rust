@@ -107,7 +107,7 @@ pub async fn handle_account_login(
                 &codes::ERROR_DUPLICATED_LOGIN,
             );
         }
-        {
+        let changed_sectors = {
             let mut world = state.world.write();
             if let Some(old) = world.get_by_socket(&old_id) {
                 if let Some(ref rid) = old.chat_room_id.clone() {
@@ -121,7 +121,13 @@ pub async fn handle_account_login(
                     );
                 }
             }
-            let _ = world.remove_account(&old_id);
+            world
+                .remove_account(&old_id)
+                .map(|(_, sessions)| sessions)
+                .unwrap_or_default()
+        };
+        for (host_member_number, sector_index) in changed_sectors {
+            crate::account::emit_prison_sector_sync(&state, host_member_number, sector_index);
         }
         if let Some(io) = state.io.get() {
             crate::socket_util::disconnect_socket(io, &old_id);

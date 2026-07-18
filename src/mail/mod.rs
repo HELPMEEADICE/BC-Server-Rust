@@ -22,12 +22,7 @@ impl Mailer {
                 Ok(builder) => {
                     let creds =
                         Credentials::new(config.email_user.clone(), config.email_password.clone());
-                    Some(
-                        builder
-                            .port(config.email_port)
-                            .credentials(creds)
-                            .build(),
-                    )
+                    Some(builder.port(config.email_port).credentials(creds).build())
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to build SMTP transport");

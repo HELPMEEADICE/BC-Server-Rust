@@ -48,10 +48,12 @@ pub async fn handle_account_create(
             let _ = socket.emit(events::CREATION_RESPONSE, &codes::NEW_ACCOUNTS_EXCEEDED);
             return;
         }
-        world.account_creation_ip.push(crate::state::AccountCreationRecord {
-            address: ip.clone(),
-            time: common_time(),
-        });
+        world
+            .account_creation_ip
+            .push(crate::state::AccountCreationRecord {
+                address: ip.clone(),
+                time: common_time(),
+            });
     }
 
     let account_name = req.account_name.to_uppercase();

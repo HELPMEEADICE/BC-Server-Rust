@@ -70,7 +70,10 @@ pub async fn handle_account_ownership(
             acc.account_name.clone()
         };
         clear_ownership_db(&state, &clear).await;
-        let _ = socket.emit(events::ACCOUNT_OWNERSHIP, &json!({ "ClearOwnership": true }));
+        let _ = socket.emit(
+            events::ACCOUNT_OWNERSHIP,
+            &json!({ "ClearOwnership": true }),
+        );
         return;
     }
 
@@ -161,12 +164,7 @@ pub async fn handle_account_ownership(
             let _ = state.db.update_fields(&target.account_name, doc).await;
         }
         if let Some(io) = state.io.get() {
-            crate::socket_util::emit_to(
-                io,
-                &target.socket_id,
-                events::ACCOUNT_OWNERSHIP,
-                &set,
-            );
+            crate::socket_util::emit_to(io, &target.socket_id, events::ACCOUNT_OWNERSHIP, &set);
         }
         sync_character(&socket, &state, target_mn, target_mn);
         return;
@@ -290,8 +288,7 @@ pub async fn handle_account_ownership(
                     o.get("MemberNumber").and_then(|v| v.as_i64()) == Some(src_member)
                         && o.get("EndTrialOfferedByMemberNumber").is_none()
                         && o.get("Stage").and_then(|v| v.as_i64()) == Some(0)
-                        && o
-                            .get("Start")
+                        && o.get("Start")
                             .and_then(|v| v.as_i64())
                             .is_some_and(|s| s + OWNERSHIP_DELAY_MS <= common_time())
                 })
@@ -555,7 +552,16 @@ fn emit_release_fail(socket: &SocketRef, state: &AppState, socket_id: &str, src_
             .and_then(|a| a.chat_room_id.as_ref())
             .and_then(|id| world.chat_rooms.get(id).map(|r| r.socket_room_name()))
     } {
-        room_message(socket, state, &room_name, src_member, "ReleaseFail", "ServerMessage", Some(src_member), None);
+        room_message(
+            socket,
+            state,
+            &room_name,
+            src_member,
+            "ReleaseFail",
+            "ServerMessage",
+            Some(src_member),
+            None,
+        );
     }
 }
 
@@ -790,10 +796,8 @@ pub async fn handle_account_lovership(
         if target.lovership.len() < 5 || tl.is_some() {
             if action.as_deref() == Some("Accept") {
                 let now = common_time();
-                let src_entry =
-                    json!({ "MemberNumber": target_mn, "Name": target.name, "Start": now, "Stage": 0 });
-                let tgt_entry =
-                    json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 0 });
+                let src_entry = json!({ "MemberNumber": target_mn, "Name": target.name, "Start": now, "Stage": 0 });
+                let tgt_entry = json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 0 });
                 apply_mutual_lover(
                     &socket,
                     &state,
@@ -835,8 +839,7 @@ pub async fn handle_account_lovership(
             let now = common_time();
             let src_entry =
                 json!({ "MemberNumber": target_mn, "Name": target.name, "Start": now, "Stage": 1 });
-            let tgt_entry =
-                json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 1 });
+            let tgt_entry = json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 1 });
             apply_mutual_lover(
                 &socket,
                 &state,
@@ -877,8 +880,7 @@ pub async fn handle_account_lovership(
             let now = common_time();
             let src_entry =
                 json!({ "MemberNumber": target_mn, "Name": target.name, "Start": now, "Stage": 2 });
-            let tgt_entry =
-                json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 2 });
+            let tgt_entry = json!({ "MemberNumber": src.member_number, "Name": src.name, "Start": now, "Stage": 2 });
             apply_mutual_lover(
                 &socket,
                 &state,
@@ -918,16 +920,19 @@ async fn handle_lover_break(
                 };
                 // Node uses findIndex followed by splice(index, 1): it removes only the
                 // first match and, when absent, its splice(-1, 1) removes the last entry.
-                let index = acc
-                    .lovership
-                    .iter()
-                    .position(|lover| lover.get("Name").and_then(|value| value.as_str()) == Some(name.as_str()));
+                let index = acc.lovership.iter().position(|lover| {
+                    lover.get("Name").and_then(|value| value.as_str()) == Some(name.as_str())
+                });
                 if let Some(index) = index {
                     acc.lovership.remove(index);
                 } else {
                     acc.lovership.pop();
                 }
-                (acc.account_name.clone(), acc.lovership.clone(), acc.member_number)
+                (
+                    acc.account_name.clone(),
+                    acc.lovership.clone(),
+                    acc.member_number,
+                )
             };
             persist_lovership_clean(state, list.2, &list.1).await;
             let clean = clean_lovership(&list.1);
@@ -956,12 +961,7 @@ async fn handle_lover_break(
         }
         let mut list = acc.lovership.clone();
         list.remove(i);
-        (
-            acc.member_number,
-            acc.account_name.clone(),
-            true,
-            list,
-        )
+        (acc.member_number, acc.account_name.clone(), true, list)
     };
 
     if !can_break {
@@ -1011,10 +1011,7 @@ async fn handle_lover_break(
         persist_lovership_clean(state, target_mn, &tgt_list).await;
     } else {
         // Offline: remove lover entry with our MemberNumber
-        let _ = state
-            .db
-            .pull_lovership_member(target_mn, src_mn)
-            .await;
+        let _ = state.db.pull_lovership_member(target_mn, src_mn).await;
     }
 
     let clean = clean_lovership(&new_src_list);
@@ -1090,7 +1087,10 @@ async fn apply_mutual_lover(
 
     let clean_src = clean_lovership(&src_list);
     let clean_tgt = clean_lovership(&tgt_list);
-    let _ = socket.emit(events::ACCOUNT_LOVERSHIP, &json!({ "Lovership": clean_src }));
+    let _ = socket.emit(
+        events::ACCOUNT_LOVERSHIP,
+        &json!({ "Lovership": clean_src }),
+    );
     if let Some(io) = state.io.get() {
         crate::socket_util::emit_to(
             io,
@@ -1130,9 +1130,7 @@ fn lover_index(list: &[Value], member: i64) -> Option<usize> {
 fn clean_lovership(list: &[Value]) -> Vec<Value> {
     let mut out = Vec::new();
     for l in list {
-        if l.get("BeginDatingOfferedByMemberNumber").is_some()
-            && l.get("MemberNumber").is_none()
-        {
+        if l.get("BeginDatingOfferedByMemberNumber").is_some() && l.get("MemberNumber").is_none() {
             continue; // pending dating offer only — strip
         }
         let mut e = l.clone();

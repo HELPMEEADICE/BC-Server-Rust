@@ -66,7 +66,10 @@ pub async fn handle_chat_room_search(
         // Node: Query is trim only; matching uses uppercased room name includes(Query)
         let query = query_raw.trim().to_string();
         let query_upper = query.to_uppercase();
-        let include_full = data.get("FullRooms").and_then(|v| v.as_bool()).unwrap_or(false);
+        let include_full = data
+            .get("FullRooms")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let show_locked = data
             .get("ShowLocked")
             .and_then(|v| v.as_bool())
@@ -273,8 +276,7 @@ pub async fn handle_chat_room_create(
     let name_raw = data.get("Name").and_then(|v| v.as_str()).map(str::trim);
     let description = data.get("Description").and_then(|v| v.as_str());
     let background = data.get("Background").and_then(|v| v.as_str());
-    let (Some(name_raw), Some(description), Some(background)) =
-        (name_raw, description, background)
+    let (Some(name_raw), Some(description), Some(background)) = (name_raw, description, background)
     else {
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
@@ -312,10 +314,11 @@ pub async fn handle_chat_room_create(
         return;
     };
     for key in ["Admin", "Ban", "Whitelist"] {
-        if !fields
-            .get(key)
-            .is_some_and(|value| value.as_array().is_some_and(|items| items.iter().all(Value::is_i64)))
-        {
+        if !fields.get(key).is_some_and(|value| {
+            value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_i64))
+        }) {
             fields.insert(key.to_string(), Value::Null);
         }
     }
@@ -325,7 +328,9 @@ pub async fn handle_chat_room_create(
         }
     }
     if fields.get("BlockCategory").is_some_and(|value| {
-        !value.as_array().is_some_and(|items| items.iter().all(Value::is_string))
+        !value
+            .as_array()
+            .is_some_and(|items| items.iter().all(Value::is_string))
     }) {
         fields.insert("BlockCategory".to_string(), json!([]));
     }
@@ -839,12 +844,7 @@ pub fn sync_room_properties(socket: &SocketRef, state: &AppState, room_id: &str,
     }
     let name = room.socket_room_name();
     drop(world);
-    crate::socket_util::emit_within(
-        socket,
-        name,
-        events::CHAT_ROOM_SYNC_ROOM_PROPERTIES,
-        &props,
-    );
+    crate::socket_util::emit_within(socket, name, events::CHAT_ROOM_SYNC_ROOM_PROPERTIES, &props);
 }
 
 /// Sync a single character to the room (ChatRoomSyncCharacter).
@@ -866,7 +866,9 @@ pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source:
         "Character": character,
         "SourceMemberNumber": source,
     });
-    let source_socket_id = world.get_by_member(source).map(|account| account.socket_id.clone());
+    let source_socket_id = world
+        .get_by_member(source)
+        .map(|account| account.socket_id.clone());
     drop(world);
     if let Some(source_socket_id) = source_socket_id {
         if let Some(io) = state.io.get() {
@@ -880,7 +882,9 @@ pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source:
                 return;
             }
         }
-        if let Some(source_socket) = crate::socket_util::get_socket_from_ref(socket, &source_socket_id) {
+        if let Some(source_socket) =
+            crate::socket_util::get_socket_from_ref(socket, &source_socket_id)
+        {
             crate::socket_util::emit_to_room(
                 &source_socket,
                 name,
@@ -893,7 +897,12 @@ pub fn sync_character(socket: &SocketRef, state: &AppState, member: i64, source:
     crate::socket_util::emit_to_room(socket, name, events::CHAT_ROOM_SYNC_CHARACTER, &payload);
 }
 
-pub fn sync_room_to_member(socket: &SocketRef, state: &AppState, room_id: &str, source_member: i64) {
+pub fn sync_room_to_member(
+    socket: &SocketRef,
+    state: &AppState,
+    room_id: &str,
+    source_member: i64,
+) {
     let payload = {
         let world = state.world.read();
         let Some(room) = world.chat_rooms.get(room_id) else {

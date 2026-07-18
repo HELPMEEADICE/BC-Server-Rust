@@ -80,7 +80,9 @@ pub async fn handle_chat_room_admin(
         } else if action == "Swap" {
             apply_swap(&mut world, &acc, &room_id, &data)
         } else {
-            apply_member_or_offline(&mut world, &socket, &acc, &room_id, &action, target_mn, &data)
+            apply_member_or_offline(
+                &mut world, &socket, &acc, &room_id, &action, target_mn, &data,
+            )
         }
     };
 
@@ -337,11 +339,7 @@ fn apply_update(
         room.locked = l;
     }
     if let Some(m) = room_data.get("MapData") {
-        room.map_data = if m.is_null() {
-            None
-        } else {
-            Some(m.clone())
-        };
+        room.map_data = if m.is_null() { None } else { Some(m.clone()) };
     }
 
     let new_key = crate::state::World::room_key(&room.environment, &room.name);
@@ -494,7 +492,15 @@ fn apply_member_or_offline(
                 if let Some(r) = world.chat_rooms.get_mut(room_id) {
                     r.members.swap(a, a - 1);
                 }
-                move_effect(world, room_id, acc, target_mn, &target_name, "ServerMoveLeft", data)
+                move_effect(
+                    world,
+                    room_id,
+                    acc,
+                    target_mn,
+                    &target_name,
+                    "ServerMoveLeft",
+                    data,
+                )
             }
             "MoveRight" => {
                 let len = world
@@ -705,7 +711,10 @@ fn move_effect(
     let Some(room) = world.chat_rooms.get(room_id) else {
         return AdminEffects::empty();
     };
-    let publish = data.get("Publish").and_then(|v| v.as_bool()).unwrap_or(false);
+    let publish = data
+        .get("Publish")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mut e = AdminEffects {
         reorder: Some((
             room.socket_room_name(),
