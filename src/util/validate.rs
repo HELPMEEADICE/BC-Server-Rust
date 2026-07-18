@@ -5,10 +5,7 @@ static ACCOUNT_EMAIL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-zA-Z0-9@.!#$%&'*+/=?^_`{|}~-]{5,100}$").unwrap());
 static ACCOUNT_NAME: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9]{1,20}$").unwrap());
 static ACCOUNT_PASSWORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9]{1,20}$").unwrap());
-static ACCOUNT_RESET_NUMBER: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[0-9]{1,20}$").unwrap());
 static CHARACTER_NAME: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z ]{1,20}$").unwrap());
-static CHARACTER_NICKNAME: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\p{L}\p{Nd}\p{Z}'-]+$").unwrap());
 static CHAT_ROOM_NAME: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[\x20-\x7E]{1,20}$").unwrap());
 
 pub const CHAT_MESSAGE_MAX_LENGTH: usize = 2000;
@@ -32,16 +29,8 @@ pub fn is_character_name(s: &str) -> bool {
     CHARACTER_NAME.is_match(s)
 }
 
-pub fn is_character_nickname(s: &str) -> bool {
-    CHARACTER_NICKNAME.is_match(s)
-}
-
 pub fn is_chat_room_name(s: &str) -> bool {
     CHAT_ROOM_NAME.is_match(s)
-}
-
-pub fn is_reset_number(s: &str) -> bool {
-    ACCOUNT_RESET_NUMBER.is_match(s)
 }
 
 /// Matches Node `CommonEmailIsValid`.

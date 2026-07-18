@@ -272,12 +272,7 @@ pub async fn handle_chat_room_create(
     if !crate::handlers::check_message_rate(&socket) {
         return;
     }
-    // Node requires Name, Description, Background as strings
-    let name_raw = data.get("Name").and_then(|v| v.as_str()).map(str::trim);
-    let description = data.get("Description").and_then(|v| v.as_str());
-    let background = data.get("Background").and_then(|v| v.as_str());
-    let (Some(name_raw), Some(description), Some(background)) = (name_raw, description, background)
-    else {
+    let Some(name_raw) = data.get("Name").and_then(|v| v.as_str()).map(str::trim) else {
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
     };
@@ -295,14 +290,6 @@ pub async fn handle_chat_room_create(
     let has_access = data.get("Access").map(|v| v.is_array()).unwrap_or(false);
     let has_locked = data.get("Locked").map(|v| v.is_boolean()).unwrap_or(false);
     if has_access && has_locked {
-        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
-        return;
-    }
-
-    if !is_chat_room_name(name_raw)
-        || description.chars().count() > CHAT_ROOM_DESCRIPTION_MAX_LENGTH
-        || background.len() > 100
-    {
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
     }
@@ -338,7 +325,15 @@ pub async fn handle_chat_room_create(
         let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
         return;
     };
+    // The request type enforces Node's required string fields: Name, Description and Background.
     req.name = name_raw.to_string();
+    if !is_chat_room_name(&req.name)
+        || req.description.chars().count() > CHAT_ROOM_DESCRIPTION_MAX_LENGTH
+        || req.background.len() > 100
+    {
+        let _ = socket.emit(events::CHAT_ROOM_CREATE_RESPONSE, &"InvalidRoomData");
+        return;
+    }
 
     // Fill Private from Visibility / Access from Locked (Node compat block)
     if has_visibility {
@@ -391,11 +386,8 @@ pub async fn handle_chat_room_create(
             acc.member_number,
         );
 
-        room.description = description
-            .chars()
-            .take(CHAT_ROOM_DESCRIPTION_MAX_LENGTH)
-            .collect();
-        room.background = background.to_string();
+        room.description = req.description;
+        room.background = req.background;
         if let Some(p) = req.private {
             room.private = p;
         }
@@ -830,21 +822,6 @@ pub fn room_message(
         events::CHAT_ROOM_MESSAGE,
         &payload,
     );
-}
-
-/// Broadcast room properties to all members.
-pub fn sync_room_properties(socket: &SocketRef, state: &AppState, room_id: &str, source: i64) {
-    let world = state.world.read();
-    let Some(room) = world.chat_rooms.get(room_id) else {
-        return;
-    };
-    let mut props = room.to_properties_json();
-    if let Some(obj) = props.as_object_mut() {
-        obj.insert("SourceMemberNumber".into(), json!(source));
-    }
-    let name = room.socket_room_name();
-    drop(world);
-    crate::socket_util::emit_within(socket, name, events::CHAT_ROOM_SYNC_ROOM_PROPERTIES, &props);
 }
 
 /// Sync a single character to the room (ChatRoomSyncCharacter).

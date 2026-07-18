@@ -72,9 +72,9 @@ pub struct ChatRoomCreateRequest {
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(rename = "Description")]
-    pub description: Option<String>,
+    pub description: String,
     #[serde(rename = "Background")]
-    pub background: Option<String>,
+    pub background: String,
     #[serde(rename = "Private")]
     pub private: Option<bool>,
     #[serde(rename = "Locked")]
@@ -103,8 +103,6 @@ pub struct ChatRoomCreateRequest {
     pub map_data: Option<Value>,
     #[serde(rename = "Custom")]
     pub custom: Option<Value>,
-    #[serde(flatten)]
-    pub extra: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,20 +121,6 @@ pub struct ChatRoomMessage {
     pub target: Option<MemberNumber>,
     #[serde(rename = "Dictionary")]
     pub dictionary: Option<Value>,
-    #[serde(flatten)]
-    pub extra: Value,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChatRoomAdminRequest {
-    #[serde(rename = "Action")]
-    pub action: String,
-    #[serde(rename = "MemberNumber")]
-    pub member_number: Option<MemberNumber>,
-    #[serde(rename = "MemberNumberList")]
-    pub member_number_list: Option<Vec<MemberNumber>>,
-    #[serde(flatten)]
-    pub extra: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,14 +143,6 @@ pub struct AccountCreateSuccess {
     pub online_id: String,
     #[serde(rename = "MemberNumber")]
     pub member_number: MemberNumber,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AccountQueryResult {
-    #[serde(rename = "Query")]
-    pub query: String,
-    #[serde(rename = "Result")]
-    pub result: Value,
 }
 
 // ---------------------------------------------------------------------------
